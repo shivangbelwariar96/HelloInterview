@@ -1,3 +1,6 @@
+<img width="1132" alt="Screenshot 2025-04-13 at 4 40 13 PM" src="https://github.com/user-attachments/assets/513dba3a-a36a-4dc8-9f7f-98a0bc414c81" />
+
+
 # System Design: Online Auction Platform Like eBay
 
 This is a concise, interview-ready summary for designing an eBay-like online auction platform, tailored for a 35-minute interview. It covers all critical points to excel, omitting extraneous details (e.g., exhaustive schemas) while aligning with your 20+ system design cheatsheet for efficient study.
