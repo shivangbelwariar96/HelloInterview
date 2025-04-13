@@ -1,3 +1,6 @@
+<img width="1127" alt="Screenshot 2025-04-13 at 4 39 34 PM" src="https://github.com/user-attachments/assets/af5694b5-024d-48ff-98a6-bfa1d1867f27" />
+
+
 # System Design: Fitness Tracking App Like Strava
 
 This is a concise, interview-ready summary for designing a Strava-like fitness tracking app, optimized for a 35-minute interview. It covers all critical points to succeed, omitting unnecessary details (e.g., full DB schemas) while aligning with your 20+ system design cheatsheet for efficient study.
