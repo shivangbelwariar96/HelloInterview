@@ -1,3 +1,9 @@
+
+<img width="1120" alt="Screenshot 2025-04-13 at 3 59 32 PM" src="https://github.com/user-attachments/assets/4f4fa80f-2578-42ae-a6af-6f5341a05a07" />
+
+
+
+
 # System Design: URL Shortener Like Bit.ly
 
 This is a concise, interview-ready summary for designing a URL shortener like Bit.ly, tailored for quick review and covering all critical points to ensure you succeed in the interview. It omits unnecessary details (e.g., full DB schemas, verbose explanations) but includes everything essential for a junior-to-mid-level candidate. The format is clear, focused, and optimized for studying alongside your 20+ other system designs.
