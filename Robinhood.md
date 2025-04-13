@@ -1,3 +1,6 @@
+<img width="1134" alt="Screenshot 2025-04-13 at 4 45 40 PM" src="https://github.com/user-attachments/assets/cbb5b181-f9f9-41f3-95ab-b92d540954e6" />
+
+
 # System Design: Stock Trading Platform Like Robinhood
 
 This is a concise, interview-ready summary for designing a stock trading platform like Robinhood, optimized for a 35-minute interview. It addresses all critical points to excel, aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to high consistency, low latency (<200ms), and minimizing exchange connections while handling 100M trades/day.
