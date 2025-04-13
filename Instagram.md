@@ -1,3 +1,6 @@
+<img width="1134" alt="Screenshot 2025-04-13 at 4 43 48 PM" src="https://github.com/user-attachments/assets/b8ecb51c-1577-45e1-a533-8fdd20fe090b" />
+
+
 # System Design: Photo Sharing App Like Instagram
 
 This is a concise, interview-ready summary for designing a photo-sharing app like Instagram, optimized for a 35-minute interview. It covers all critical points to excel, omitting unnecessary details (e.g., full DB schemas) while aligning with your 20+ system design cheatsheet for efficient study. The design is classified as "hard" due to its scale (500M DAU) and media-heavy requirements.
