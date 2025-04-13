@@ -1,3 +1,7 @@
+<img width="675" alt="Screenshot 2025-04-13 at 4 46 20 PM" src="https://github.com/user-attachments/assets/fdf54e77-bacb-4be0-b263-98319518bb77" />
+
+
+
 # System Design: Collaborative Document Editor Like Google Docs
 
 This is a concise, interview-ready summary for designing a collaborative document editor like Google Docs, optimized for a 35-minute interview. It covers all critical points to excel, aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to real-time collaboration, eventual consistency, and scaling to millions of users with low latency (<100ms).
