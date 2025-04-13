@@ -1,3 +1,6 @@
+<img width="1129" alt="Screenshot 2025-04-13 at 4 44 20 PM" src="https://github.com/user-attachments/assets/0c067598-2479-4519-b684-cb3bba0bc1ae" />
+
+
 # System Design: YouTube Top K Videos Feature
 
 This is a concise, interview-ready summary for designing YouTube’s Top K Videos feature, tailored for a 35-minute interview. It addresses all critical points to excel, omitting extraneous details while aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to massive scale (70B views/day) and precise counting requirements, avoiding probabilistic solutions like count-min sketch.
