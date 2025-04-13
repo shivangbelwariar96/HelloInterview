@@ -1,3 +1,7 @@
+<img width="690" alt="Screenshot 2025-04-13 at 4 47 15 PM" src="https://github.com/user-attachments/assets/a2bb536c-ed00-4935-9b9f-2bae427217d9" />
+
+
+
 # System Design: Distributed Cache Like Redis
 
 This is a concise, interview-ready summary for designing a distributed cache like Redis, optimized for a 35-minute interview. It addresses all critical points to excel, aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to high availability, low latency (<10ms), and scaling to 1TB data and 100K req/s with eventual consistency.
