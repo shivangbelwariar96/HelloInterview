@@ -1,3 +1,6 @@
+<img width="1149" alt="Screenshot 2025-04-13 at 4 00 38 PM" src="https://github.com/user-attachments/assets/bc2ec97c-6f1b-4231-a6a5-c501cc74ce65" />
+
+
 # System Design: File Storage Service Like Dropbox
 
 This is a concise, interview-ready summary for designing a file storage service like Dropbox, tailored for quick review and covering all critical points to succeed in a 35-minute interview. It omits unnecessary details (e.g., full DB schemas, verbose trade-offs) but includes everything essential for a junior-to-mid-level candidate. The format is clear, focused, and optimized for studying alongside your 20+ other system designs.
