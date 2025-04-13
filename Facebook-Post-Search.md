@@ -1,3 +1,6 @@
+<img width="1137" alt="Screenshot 2025-04-13 at 4 43 18 PM" src="https://github.com/user-attachments/assets/146d1665-8d49-4e7e-8ae7-d82dfbe20ec5" />
+
+
 # System Design: Facebook Post Search
 
 This is a concise, interview-ready summary for designing a Facebook Post Search system, tailored for a 35-minute interview. It covers all critical points to excel, omitting extraneous details (e.g., exhaustive schemas) while aligning with your 20+ system design cheatsheet for efficient study. The design assumes no pre-built search engines (e.g., Elasticsearch) are allowed, focusing on fundamental indexing and scaling.
