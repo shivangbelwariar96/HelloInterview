@@ -1,3 +1,6 @@
+<img width="1130" alt="Screenshot 2025-04-13 at 4 48 35 PM" src="https://github.com/user-attachments/assets/659ba9cd-262a-4154-9585-8167a9eec129" />
+
+
 # System Design: Distributed Job Scheduler Like Airflow
 
 This is a concise, interview-ready summary for designing a distributed job scheduler like Airflow, optimized for a 35-minute interview. It covers all critical points to excel, aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to high availability, precise execution (<2s), scalability (10K jobs/s), and at-least-once execution guarantees.
