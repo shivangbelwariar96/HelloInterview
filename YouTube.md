@@ -1,3 +1,7 @@
+<img width="1133" alt="Screenshot 2025-04-13 at 4 47 52 PM" src="https://github.com/user-attachments/assets/7289c0a3-cc45-4707-9ed0-ff2d036d1309" />
+
+
+
 # System Design: Video Streaming Platform Like YouTube
 
 This is a concise, interview-ready summary for designing a video streaming platform like YouTube, optimized for a 35-minute interview. It covers all critical points to excel, aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to high availability, low-latency streaming, large video support (10s of GB), and scaling to ~1M uploads and 100M views/day.
