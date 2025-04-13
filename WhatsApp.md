@@ -1,3 +1,6 @@
+<img width="1159" alt="Screenshot 2025-04-13 at 4 38 04 PM" src="https://github.com/user-attachments/assets/16a74b02-68c2-495c-a7f8-ac13455d8e2a" />
+
+
 # System Design: Messaging App Like WhatsApp
 
 This is a concise, interview-ready summary for designing a messaging app like WhatsApp, tailored for a 35-minute interview. It covers all critical points to excel, omitting extraneous details (e.g., exhaustive schemas) while aligning with your 20+ system design cheatsheet for efficient study.
