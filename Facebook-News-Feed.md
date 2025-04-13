@@ -1,3 +1,7 @@
+<img width="728" alt="Screenshot 2025-04-13 at 4 34 49 PM" src="https://github.com/user-attachments/assets/cf380ee3-89e0-40ac-bd62-a149f2b9337e" />
+
+
+
 # System Design: Facebook's News Feed
 
 This is a concise, interview-ready summary for designing a social media news feed like Facebook’s, optimized for a 35-minute interview. It covers all critical points to succeed, omitting unnecessary details (e.g., full DB schemas) while aligning with your 20+ system design cheatsheet for quick study.
