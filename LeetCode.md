@@ -1,3 +1,5 @@
+<img width="1133" alt="Screenshot 2025-04-13 at 4 37 29 PM" src="https://github.com/user-attachments/assets/c4862d99-f351-4692-a015-0c7aebdd0112" />
+
 # System Design: Coding Platform Like LeetCode
 
 This is a concise, interview-ready summary for designing a coding platform like LeetCode, optimized for a 35-minute interview. It covers all critical points to succeed, omitting unnecessary details (e.g., full DB schemas) while aligning with your 20+ system design cheatsheet for quick study.
