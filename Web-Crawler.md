@@ -1,3 +1,7 @@
+<img width="1134" alt="Screenshot 2025-04-13 at 4 49 14 PM" src="https://github.com/user-attachments/assets/ec5e53b3-1256-4a36-bd6c-5f8a8387f9ed" />
+
+
+
 # System Design: Web Crawler
 
 This is a concise, interview-ready summary for designing a web crawler, optimized for a 35-minute interview. It covers all critical points to excel, aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to fault tolerance, politeness (robots.txt), efficiency (<5 days), and scalability (10B pages).
