@@ -1,3 +1,6 @@
+<img width="1142" alt="Screenshot 2025-04-13 at 4 02 27 PM" src="https://github.com/user-attachments/assets/f85531e4-9dcf-4a5b-ae05-cfc0f5525a36" />
+
+
 # System Design: Ticket Booking Site Like Ticketmaster
 
 This is a concise, interview-ready summary for designing a ticket booking site like Ticketmaster, tailored for a 35-minute interview. It covers all essential points to excel, omitting extraneous details (e.g., full DB schemas) while aligning with your 20+ system design cheatsheet for quick study.
