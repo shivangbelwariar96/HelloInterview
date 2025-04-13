@@ -1,6 +1,6 @@
 <img width="725" alt="Screenshot 2025-04-13 at 4 35 33 PM" src="https://github.com/user-attachments/assets/0e8f272f-1ff0-40c8-bd1d-3904d5c71c0c" />
 
-#System Design: Dating App Like Tinder
+# System Design: Dating App Like Tinder
 
 This is a concise, interview-ready summary for designing a dating app like Tinder, tailored for a 35-minute interview. It covers all essential points to excel, omitting extraneous details (e.g., exhaustive schemas) while aligning with your 20+ system design cheatsheet for quick study.
 
