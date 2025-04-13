@@ -1,3 +1,6 @@
+<img width="1131" alt="Screenshot 2025-04-13 at 4 01 27 PM" src="https://github.com/user-attachments/assets/a2ad3e97-5efc-4f1a-81f2-8ff43faa85f7" />
+
+
 # System Design: Local Delivery Service Like Gopuff
 
 This is a streamlined, interview-focused summary for designing a local delivery service like Gopuff, covering all critical points for a 35-minute interview. It’s concise, omitting unnecessary details (e.g., exhaustive schemas) but including everything needed to excel. The format aligns with your 20+ system design cheatsheet for quick study.
