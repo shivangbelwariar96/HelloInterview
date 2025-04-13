@@ -1,3 +1,6 @@
+<img width="1089" alt="Screenshot 2025-04-13 at 4 38 43 PM" src="https://github.com/user-attachments/assets/3ea2100b-761a-45f7-91fc-a62e16a56f9a" />
+
+
 # System Design: Local Business Review Site Like Yelp
 
 This is a concise, interview-ready summary for designing a Yelp-like platform, optimized for a 35-minute interview. It covers all essential points to excel, omitting unnecessary details (e.g., full schemas) while aligning with your 20+ system design cheatsheet for quick study.
