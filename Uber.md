@@ -1,3 +1,6 @@
+<img width="1141" alt="Screenshot 2025-04-13 at 4 44 51 PM" src="https://github.com/user-attachments/assets/90420d93-794a-4b79-afc3-14523d6c8674" />
+
+
 # System Design: Ride-Sharing Service Like Uber
 
 This is a concise, interview-ready summary for designing a ride-sharing service like Uber, optimized for a 35-minute interview. It covers all critical points to excel, omitting extraneous details while aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to high throughput, geospatial queries, and strong consistency requirements.
