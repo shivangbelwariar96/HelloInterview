@@ -1,3 +1,7 @@
+<img width="1122" alt="Screenshot 2025-04-13 at 4 49 52 PM" src="https://github.com/user-attachments/assets/482768c2-2abb-4f92-a065-8091f063aba1" />
+
+
+
 # System Design: Ad Click Aggregator
 
 This is a concise, interview-ready summary for designing an ad click aggregator, optimized for a 35-minute interview. It covers all critical points to excel, aligning with your 20+ system design cheatsheet for efficient study. The design is "hard" due to scalability (10K clicks/s), low-latency queries (<1s), fault tolerance, real-time processing, and idempotency.
