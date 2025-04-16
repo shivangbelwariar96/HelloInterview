@@ -1,5 +1,10 @@
 # Designing a Distributed Message Queue
 
+<img width="1173" alt="Screenshot 2025-04-15 at 9 50 37 PM" src="https://github.com/user-attachments/assets/31190825-34ea-4c7c-a364-1fb341e82750" />
+
+
+
+
 ## 1. Overview
 The video discusses the design of a distributed message queue, which serves as an intermediary component allowing asynchronous communication between producer and consumer web services. The design focuses on ensuring reliability, performance, and scalability. It puts emphasis on understanding the operational and architectural requirements while highlighting various components that contribute to a robust distributed messaging system.
 
