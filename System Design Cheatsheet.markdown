@@ -5,18 +5,20 @@ These prioritize low-latency data retrieval, efficient caching, and scalability.
 
 ### 1. URL Shortener (Bitly)
 **Improvements:**
-- **Key Generation**: Use base62 encoding (a-z, A-Z, 0-9) for short keys (e.g., 7 characters yield ~62^7 URLs). Use a distributed counter (e.g., ZooKeeper) or MD5 hash of the long URL with truncation to avoid collisions.
+- **Key Generation**: Use base62 encoding (a-z, A-Z, 0-9) for short keys (e.g., 7 characters yield ~62^7 URLs). Use a distributed counter (Redis is particularly well-suited for managing this counter because it's single-threaded and supports atomic operations.) or MD5 hash of the long URL with truncation to avoid collisions.
 - **Collision Handling**: Add a Bloom filter to check for existing short URLs before insertion. If a collision occurs, append a unique suffix or retry with a new hash.
 - **DB Storage**: Use a NoSQL DB like DynamoDB for high read/write throughput. Store {short_url: long_url, creation_time, expiration_time, user_id}.
+- **301 vs 302**: Choose 302 (Temporary Redirect) ensuring that future requests for the short URL will always go through our server first.
 - **Caching**: Use Redis for caching hot URLs (e.g., LRU eviction). Cache both short-to-long and long-to-short mappings to speed up lookups and prevent duplicate short URLs.
-- **Sharding**: Shard by short_url prefix to distribute load across DB nodes. Avoid sharding by user_id to prevent hotspots from power users.
+- **Sharding**: Shard by short_url prefix to distribute load across DB nodes. Avoid sharding by user_id to prevent hotspots from power users. (can create some partitionKey, SortKey, GSI, LSI)
 - **Edge Cases**: Handle expired URLs (use TTL in Redis/DB), malicious URLs (blocklist), custom aliases (store separately), rate-limited requests (throttle excessive redirects), and invalid URLs (validate format on input).
 - **Monitoring**: Track redirect latency, cache hit ratio, collision rate, and request rate per second.
 - **Trade-offs:**
-  - **Hashing vs. Counter**: Hashing (MD5) is stateless but risks collisions; a counter (ZooKeeper) is collision-free but requires coordination. Choose counter for guaranteed uniqueness and simplicity.
+  - **Hashing vs. Counter**: Hashing (MD5) is stateless but risks collisions; a counter (Redis) is collision-free but requires coordination. Choose counter for guaranteed uniqueness and simplicity.
   - **SQL vs. NoSQL**: NoSQL (DynamoDB) is preferred for scalability and low-latency reads over SQL, which struggles with high write throughput.
   - **In-Memory vs. Persistent Storage**: Redis is fast for caching but volatile; DynamoDB ensures durability but is slower. Use Redis for hot data and DynamoDB for persistence.
 - **Why Counter + NoSQL?**: Counters ensure uniqueness without retry logic, and NoSQL scales horizontally for traffic spikes.
+- **Can USE CDN**: For low latency.
 - **Scalability Estimates**: Supports ~10K QPS for redirects, ~1B unique URLs, and ~100M daily active users with horizontal scaling of DynamoDB and Redis clusters.
 - **Latency/Throughput Targets**: Target <50ms for redirect latency, ~10K redirects/sec, and <100ms for URL creation.
 
