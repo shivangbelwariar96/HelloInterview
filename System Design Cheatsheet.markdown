@@ -649,19 +649,22 @@ These focus on processing and ranking high-cardinality data.
 - **Why Count-Min + Redis?**: Count-min scales for high cardinality, and Redis ensures low-latency ranking.
 - **Scalability Estimates**: Supports ~100K events/sec, ~1B daily events, and ~10K QPS for rankings with Redis and Spark scaling.
 - **Latency/Throughput Targets**: Target <50ms for event updates, <500ms for rankings, and ~50K events/sec processing.
-## System Architecture and Data Ingestion
+
+**System Architecture and Data Ingestion**
 The architecture leverages a Lambda Architecture, combining a fast path for approximate, low-latency results and a slow path for accurate, batch-processed results.
 Data ingestion begins with an API Gateway, which serves as the entry point for user requests (e.g., video views) and generates logs for each request. These logs capture events like video identifiers and are used to count frequencies.
 To optimize resource usage, a background process on the API Gateway aggregates events into a small, in-memory hash table (frequency counts) for a short period (e.g., seconds) or until a size limit is reached, then flushes the data in a compact binary format to reduce network I/O. Alternatively, if API Gateway is resource-constrained, log parsing and aggregation can be offloaded to a dedicated log processing cluster.
 Aggregated data is sent to a Distributed Messaging System like Apache Kafka, which partitions messages randomly across nodes to distribute load uniformly. Kafka's fault tolerance (via replication and retention, e.g., 7 days) ensures no data loss, enabling reprocessing if needed. This message bus also supports decoupling between producers (ingestion) and consumers (fast/slow processors), allowing horizontal scalability and backpressure handling.
-## Fast Path (Approximate Results)
+
+**Fast Path (Approximate Results)**
 The fast path prioritizes low-latency, approximate results for short intervals (e.g., 1-5 minutes).
 A Fast Processor service consumes Kafka messages and uses a Count-Min Sketch data structure to aggregate frequencies in memory. Count-Min Sketch is a fixed-size, two-dimensional array (e.g., thousands of columns, 5 rows for hash functions) that approximates frequency counts with bounded memory, even for large datasets.
 Each event (e.g., video view) is hashed by multiple functions, incrementing corresponding cells. Collisions may overestimate counts, but taking the minimum value across hash functions reduces errors. The Fast Processor maintains a min-heap to track the top k items, updating it as events are processed.
 Every few seconds, the Count-Min Sketch and top k list are flushed to a Storage Service, which stores results in a database (e.g., for 1-minute intervals). Since Count-Min Sketch has a fixed size, data partitioning is unnecessary, simplifying the system and avoiding replication complexities.
 However, approximate results tolerate some data loss (e.g., from host failures) as the slow path provides accurate results later. This path reduces request rates progressively: millions of events at the API Gateway are aggregated into fewer messages in Kafka, further reduced by Fast Processors, and stored as compact top k lists.
 Count-Min Sketch merging is straightforward (element-wise sum), enabling distributed aggregation without coordination overhead.
-## Slow Path (Accurate Results)
+
+**Slow Path (Accurate Results)**
 The slow path ensures precise results for longer intervals (e.g., 1-hour or 1-day) using batch processing.
 A Data Partitioner reads Kafka messages, parses them into individual events, and routes each event (e.g., video identifier) to a specific partition in another Kafka cluster, sharded by video ID. To handle hot partitions (e.g., popular videos), the Partitioner dynamically reassigns high-traffic IDs (e.g., by appending a random suffix).
 Partition Processors read from each Kafka partition, aggregating data in memory for a longer period (e.g., 5 minutes), then batch it into files stored in a Distributed File System (e.g., HDFS or S3).
@@ -671,13 +674,15 @@ Two MapReduce jobs process these files:
 The Frequency Count job maps events to key-value pairs (video ID, count), shuffles and sorts by key, and reduces by summing counts. The Top K job maps frequency data into local top k lists per chunk, then reduces them into a final top k list. Results are stored in the Storage Service.
 Kafka's replication ensures data durability, and MapReduce's fault tolerance (via task retries) guarantees accurate processing, though results are delayed (minutes to hours).
 Optionally, Apache Spark can replace MapReduce if faster job completion is desired, especially for iterative workflows or near-real-time windows.
-## Data Retrieval
+
+**Data Retrieval**
 The API Gateway exposes a topK API to retrieve the top k list for a specified time interval. Requests are routed to the Storage Service, which queries its database.
 - For short intervals (e.g., last 5 minutes), the system merges multiple 1-minute approximate lists from the fast path
 - For exact 1-hour intervals, it retrieves precise lists from the slow path
 - For custom intervals (e.g., 2 hours), merging hourly lists may yield approximate results, as precise computation requires the full dataset
 Retrieval is optimized for low latency (tens of milliseconds) by pre-computing and storing top k lists, avoiding on-the-fly calculations. Large queries may result in approximations due to list merging limitations, and k should be bounded (e.g., a few thousand) to prevent performance degradation during merge operations.
-## Scalability and Performance
+
+**Scalability and Performance**
 The system scales to handle millions of requests per second:
 - The API Gateway cluster (thousands of hosts) distributes load via load balancing
 - Kafka's partitioning and horizontal scaling manage high-throughput event streams
@@ -690,11 +695,13 @@ Latency targets include:
 - <1s for fast path results
 - Minutes for slow path results
 Throughput supports ~100K-1M events/sec, with k values up to several thousand (larger k may degrade performance due to merging costs). Sketch dimensions (width/height) can be tuned based on error tolerance and memory availability to balance performance and precision.
-## Fault Tolerance and Accuracy
+
+**Fault Tolerance and Accuracy**
 Kafka's replication and retention ensure no data loss, allowing reprocessing if Fast or Partition Processors fail. The slow path's MapReduce jobs provide accurate results by processing the full dataset, reconciling any fast path inaccuracies.
 For critical accuracy, periodic batch jobs can reprocess raw data from the Distributed File System to validate Storage Service data. The fast path sacrifices accuracy for speed, using Count-Min Sketch's probabilistic guarantees (tuned via width/height parameters for desired error bounds).
 High availability is achieved via Kafka replication and database redundancy, though fast path data loss is tolerable due to slow path recovery. Recovery strategies include data replay from Kafka, and re-computation via scheduled MapReduce pipelines.
-## Edge Cases and Optimizations
+
+**Edge Cases and Optimizations**
 **Hot Partitions:** Dynamic repartitioning in the Data Partitioner mitigates skew from popular items.
 **Delayed Events:** Event-time processing in Partition Processors (using Kafka timestamps) handles out-of-order events.
 **Duplicate Events:** Idempotency keys (e.g., unique request IDs) in the API Gateway prevent double-counting.
@@ -702,17 +709,21 @@ High availability is achieved via Kafka replication and database redundancy, tho
 **Resource Constraints:** If API Gateway hosts lack capacity for aggregation, offload log parsing to a separate cluster.
 **Data Volume:** For massive datasets, increase Kafka partitions, Fast Processor hosts, or MapReduce nodes.
 **Monitoring:** Track ingestion latency, Kafka lag, Fast Processor accuracy (via sampling), MapReduce job completion time, Storage Service query latency, and top k list consistency (via reconciliation jobs). Alert on high partition skew or database bottlenecks.
-## Trade-offs
+
+**Trade-offs**
 **Count-Min Sketch vs. Hash Table:** Count-Min Sketch uses fixed memory but is approximate; hash tables are accurate but memory-intensive. Use Count-Min Sketch for fast path simplicity.
 **Fast vs. Slow Path:** Fast path is simple and low-latency but approximate; slow path is accurate but complex and slow. Combine both for flexibility.
 **Kafka vs. Kinesis:** Kafka is robust for high-throughput streams; Kinesis is managed but costlier. Use Kafka for control and scale.
 **MapReduce vs. Spark:** MapReduce is reliable for batch; Spark is faster for iterative processing. Use MapReduce for simplicity, Spark for speed if needed.
-## Why Lambda Architecture?
+
+**Why Lambda Architecture?**
 The dual-path approach balances real-time (fast path) and accurate (slow path) requirements, leveraging Count-Min Sketch for simplicity and MapReduce for precision. Kafka ensures scalable ingestion, and the Storage Service enables fast retrieval.
 While Lambda Architecture adds complexity, it offers flexibility and robustness, and is preferred in systems where both speed and correctness matter.
-## Alternatives
+
+**Alternatives**
 A single-path solution using Kafka and Apache Spark could simplify the architecture by partitioning data and aggregating in-memory top k lists, but it may struggle with massive datasets or long intervals without batch processing.
 Count-Min Sketch alternatives (e.g., Lossy Counting, Space Saving) offer similar trade-offs but may require more tuning.
-## Applications
+
+**Applications**
 This design applies to trending services (e.g., Google Trends, X Trends), DDoS protection (identifying top IP addresses), or financial systems (most traded stocks), making it versatile for frequency-based analytics at scale.
 The same architecture can extend to any high-frequency event stream where frequency over time matters, such as ad impressions, page hits, or telemetry.
