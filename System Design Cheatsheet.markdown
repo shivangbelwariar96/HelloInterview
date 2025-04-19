@@ -62,6 +62,7 @@ These prioritize low-latency data retrieval, efficient caching, and scalability.
 - **Caching**: Cache recent posts in Redis and full timelines in Memcached to reduce DB load.
 - **Pagination**: Use cursor-based pagination (timestamp + post_id) for efficient scrolling.
 - **Ranking**: Use a weighted scoring algorithm (e.g., likes, recency, user affinity) computed via a background job (Spark) and stored in Redis.
+- **Handle users with a large number of followers**: For Justin Bieber (and other high-follow accounts), instead of writing to 90+ million followers we can instead add a flag onto the Follow table which indicates that this particular follow isn't precomputed. In the async worker queue, we'll ignore requests for these users. On the read side, when users request their feed via the Feed Service, we can grab their (partially) precomputed feed from the Feed Table and merge it with recent posts from those accounts which aren't precomputed.
 - **Edge Cases**: Handle feed staleness (refresh inactive users’ feeds periodically), deleted posts (remove from cache), skewed user activity (rate-limit influencers), privacy filters (apply on read), and cache inconsistencies (revalidate with DB).
 - **Monitoring**: Track feed refresh latency, ranking accuracy, cache eviction rate, and feed generation success rate.
 - **Trade-offs:**
@@ -93,8 +94,9 @@ These prioritize low-latency data retrieval, efficient caching, and scalability.
 **Improvements:**
 - **Media Storage**: Store images/videos in S3 with metadata (post_id, user_id, timestamp) in Cassandra for high write throughput.
 - **Feed Generation**: Use a hybrid push-pull model: push posts to active followers’ Redis timelines; pull for inactive users to reduce write load.
-- **Caching**: Cache feeds and media in Redis and CDN (Cloudflare) for low-latency delivery.
+- **Caching**: Cache feeds and media in Redis and CDN (Cloudflare) for low-latency delivery. Apply smart caching: aggressively cache popular media, use shorter TTLs for less-accessed content, and pre-warm caches for trending items.
 - **Sharding**: Shard posts by post_id and timelines by user_id using consistent hashing.
+- **low latency (< 500ms )**: To reduce write amplification from celebrities, we use a hybrid approach: fanout-on-write for users with <100K followers and fanout-on-read for celebrities (>100K followers). Celebrity posts go only to the Posts DB, not follower feeds. When a user fetches their feed, we merge precomputed posts (from Redis) with recent celebrity posts (from DB). This balances fast reads and scalable writes. Use Redis Cluster for data sharding across multiple nodes for durability
 - **Edge Cases**: Handle deleted posts (tombstone records), privacy settings (filter on read), viral content (cache hot posts), media corruption (validate uploads), and feed inconsistencies (recompute timelines).
 - **Monitoring**: Track feed latency, media load time, cache hit ratio, and post retrieval success rate.
 - **Trade-offs:**
@@ -107,10 +109,15 @@ These prioritize low-latency data retrieval, efficient caching, and scalability.
 
 ### 7. Dropbox
 **Improvements:**
-- **File Storage**: Store files in S3 with metadata (file_id, user_id, version, path) in PostgreSQL for relational queries.
+- **File Storage**: Store files in S3 with metadata (file_id, user_id, version, path) in PostgreSQL for relational queries. Use presigned URLs to let clients upload files directly to Blob Storage, bypassing the backend for faster, cheaper uploads. The client requests a URL with file metadata (saved as "uploading"), uploads the file via PUT. Backend generates the URL, saves metadata as "uploading", and updates it to "uploaded" upon receiving a notification from Blob Storage post-upload. These URLs are generated with a specific expiration time, after which they become invalid, offering a secure way to share files without altering permissions.
+- **Downloading**: Use a CDN to cache files on global servers, serving them from the closest location to the user for reduced latency and faster downloads. Generate secure, time-limited URLs for users to download files from the CDN, similar to S3 presigned URLs.
+- **Sharing files**: Create a SharedFiles table linking userId to fileId to track shared files. To find a user's files, check this table for their userId. No need to manage a separate sharelist. Downside: searching the table is a bit slower than a direct lookup.
 - **Versioning**: Store file deltas in S3 to save space; maintain version history in DB.
-- **Syncing**: Use WebSockets for real-time sync notifications and Kafka for file change events.
+- **Syncing**: Use WebSockets for real-time sync notifications and Kafka for file change events or polling(if realtime not important).
+- **Make everything fast**: Speed up uploads, downloads, and syncing by using a CDN for low-latency downloads, chunking files for parallel uploads and selective syncing of changed chunks, and compressing files (using Gzip, Brotli, or Zstandard) based on file type, size, and network conditions. Compress before encrypting for better ratios, but skip compression for media files like images/videos with low compression gains.
+- **Support Large Files**: Support large files by chunking them into 5-10MB pieces for upload to S3, using client-side fingerprinting (SHA-256) for unique file and chunk identification. Track upload progress in a FileMetadata table with a chunks field, updated via S3 event notifications. Enable resumable uploads by checking uploaded chunks and use AWS Multipart Upload API for efficient handling. Show progress indicators for better user experience.
 - **Deduplication**: Compute file hashes to store identical files once, referencing via metadata.
+- **File Security:**: Ensure file security with HTTPS for encryption in transit, S3 encryption at rest using unique keys, and access control via a shareList or table. Use signed URLs with short expiration times (e.g., 5 minutes) for downloads, compatible with CDNs like CloudFront, to prevent unauthorized access even if links are shared.
 - **Edge Cases**: Handle concurrent edits (conflict resolution with versioning), large files (chunked uploads), offline access (local caching), file corruption (validate on upload), and storage quotas (enforce limits).
 - **Monitoring**: Track sync latency, storage usage, deduplication rate, and file upload success rate.
 - **Trade-offs:**
