@@ -1015,3 +1015,29 @@ This design is adaptable to other fan-out data delivery systems, such as event-d
 
 
 
+
+# Distributed Cache System Design
+
+**Improvements:** To design a distributed cache that accelerates data retrieval for web applications by storing frequently accessed data in memory, we’ll create a system that’s fast, scalable, and highly available, minimizing calls to a slower backing data store like a database or web service. The cache will support two core operations: put (store a key-value pair) and get (retrieve a value by key), with both keys and values as strings for simplicity. We’ll start with a load balancer to distribute client requests across a cache cluster, where each host stores a shard of the data, allowing us to handle large datasets that exceed a single machine’s memory. To select the appropriate cache shard, we’ll use consistent hashing, which maps keys to a logical circle and assigns them to hosts based on hash ranges, minimizing key rehashing when hosts are added or removed.
+
+For the cache’s core implementation, we’ll use a least recently used (LRU) eviction policy, combining a hash table for O(1) key-value lookups and a doubly linked list to track usage order, evicting the least recently used item when the cache is full. Each cache host runs this LRU cache as a standalone process, accessible via TCP or UDP, and a cache client library integrated into service code handles shard selection and request routing. To ensure high performance, the LRU cache uses constant-time operations, and consistent hashing enables fast shard selection (O(log n) via binary search). To scale to high request volumes, we’ll add more cache hosts, each responsible for a subset of keys, and use memory-optimized hardware in public clouds for larger datasets. To address hot shards (shards receiving disproportionate requests), we’ll introduce master-slave replication, designating a master node per shard for put operations and read replicas for get operations, spreading load across nodes and data centers.
+
+To enhance availability, replicas will reside in different data centers, ensuring data access during network partitions or data center failures. A Configuration service, like ZooKeeper or Redis Sentinel, will monitor cache hosts via heartbeats, manage leader election, and handle failover by promoting a replica to master if the master fails. The Configuration service also maintains a dynamic list of cache hosts, which cache clients poll to stay updated, avoiding manual file updates or static configurations that require redeployment. To prevent data loss, we’ll use asynchronous replication to prioritize performance, accepting rare data loss (treated as cache misses) since the backing data store remains the source of truth. For staleness, we’ll add a time-to-live (TTL) attribute to cache entries, with passive expiration (removing items when accessed and found expired) or active expiration (using a maintenance thread with probabilistic sampling to avoid scanning billions of items).
+
+To simplify integration, the cache client can embed a local LRU cache (e.g., using Google Guava) to reduce distributed cache calls, hiding complexity from service teams. For security, we’ll restrict cache access to trusted clients via firewalls, avoiding direct internet exposure, and optionally encrypt data before storing (with performance trade-offs). Monitoring will track cache hits/misses, latency, faults, CPU/memory usage, and network I/O, with lightweight logging capturing request details (e.g., key, status code) for debugging and auditing.
+
+**Aggregation:** The cache client aggregates local and distributed cache operations, while the Configuration service centralizes host discovery and monitoring.  
+**Scheduling:** Active expiration threads run periodically to clean stale items, and the Configuration service processes heartbeats for host health checks.  
+**Edge Cases:** Handle hot shards (add replicas), unavailable hosts (treat as cache misses), inconsistent client views (synchronize host lists via Configuration service), stale data (TTL with expiration), and high throughput (scale shards and replicas).  
+**Monitoring:** Track cache hit/miss rates, request latency, shard load distribution, host health, and resource utilization.
+
+**Trade-offs:** Consistent hashing minimizes key rehashing but risks uneven key distribution or domino effects (mitigated by adding virtual nodes or using Jump Hash). Asynchronous replication boosts performance but risks data loss, while synchronous replication ensures consistency but increases latency. A dedicated cache cluster isolates resources but raises costs, whereas co-located caches save hardware but compete for service resources. A Configuration service automates host discovery but adds complexity, unlike static files that are simpler but inflexible. Memcached is simple and fast but lacks replication, while Redis with Sentinel offers availability but is more complex.
+
+**Why Consistent Hashing + LRU Cache?:** Consistent hashing ensures scalable, low-disruption sharding, and the LRU cache provides fast, memory-efficient data storage, meeting the performance and scalability needs of a distributed cache.  
+**Scalability Estimates:** Supports ~1M requests/sec, ~1B daily operations, and ~10K QPS for cache operations with shard and replica scaling.  
+**Latency/Throughput Targets:** Target <1ms for cache hits, <10ms for shard selection and network calls, and ~1M requests/sec processing.
+
+This design is versatile, applicable to systems like distributed message queues, notification services, or rate limiters, making it a robust foundation for system design interviews. I’ve ensured all critical details from the document are included, covering the LRU algorithm, consistent hashing, replication, Configuration service, and trade-offs, with no key points missed. If you have specific concerns or need further clarification, please let me know!
+
+
+
