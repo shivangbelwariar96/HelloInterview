@@ -621,6 +621,17 @@ These focus on efficient data structures and low-latency retrieval.
 - **Scalability Estimates**: Supports ~100M daily active users, ~1B posts/day, and ~100K QPS for searches with Elasticsearch and Redis scaling.
 - **Latency/Throughput Targets**: Target <100ms for search results, <200ms for caching, and ~50K searches/sec processing.
 
+
+### 35. FB Post Search (we're not allowed to use a search engine like Elasticsearch or a pre-built full-text index (like Postgres Full-Text)):
+- To enable users to **search posts** by keyword efficiently, we'll create an inverted index. This index will map keywords to the IDs of the posts that contain them. When a new post is ingested, the Ingestion Service will tokenize its content into individual keywords and then append the post's ID to the list associated with each of these keywords in our inverted index. For fast lookups, we'll store this inverted index in Redis, leveraging its in-memory capabilities. When a user searches for a keyword, we can directly retrieve the list of matching post IDs from Redis and return the corresponding posts. This approach provides significantly faster search compared to querying an unindexed database.
+- To enable **sorting search results by recency or like count**, we'll maintain multiple indexes in Redis. For recency-based sorting, we'll use Redis lists. When a new post is created, its ID will be appended to the list associated with each of its keywords. For sorting by like count, we'll use Redis sorted sets. The score in the sorted set will represent the post's like count, and the value will be the post's ID. When a new post is created, its ID will be added to the sorted set for each of its keywords with an initial score of zero. When a like event occurs, we'll update the score of the corresponding post ID in the relevant sorted sets. This approach allows for efficient retrieval of results sorted by either criterion directly from the appropriate index.
+- To **handle the large volume of search requests**, we'll implement aggressive caching at the edge using a Content Delivery Network (CDN) like Cloudflare or CloudFront. We'll configure our /search endpoint to include cache-control headers, instructing the CDN to cache search results. When a user performs a search, their request will first hit a geographically close CDN node. If the result is cached, it will be served with very low latency. If it's a cache miss, the CDN will forward the request to our API gateway and search service as usual. Combined with our in-memory Redis search cache, the CDN will significantly reduce the load on our origin servers and improve response times for the majority of search queries, especially for popular and repeated searches, leveraging our non-personalized search requirement.
+- To **handle multi-keyword phrase** queries efficiently, we can implement bigrams (or shingles). During post ingestion, we'll create tokens for each consecutive pair of words (e.g., "Taylor Swift" becomes "Taylor Swift"). These bigram tokens will also be indexed in our "Likes" and "Creation" Redis indexes, alongside single-word keywords. When a user searches for a phrase like "Taylor Swift", we can directly look up the bigram "Taylor Swift" in our indexes and retrieve the relevant post IDs, rather than performing an intersection of the results for "Taylor" and "Swift". While this increases the index size, it significantly speeds up phrase queries, a common search pattern. We might consider probabilistic methods to index only frequent bigrams to mitigate the size increase.
+- To address the **high volume of writes**, particularly for likes, we'll implement a two-stage architecture. For post creation, we'll use Kafka to buffer and distribute ingestion requests across multiple service instances, and we'll shard our Redis indexes by keyword to distribute the write load. For likes, instead of updating the index on every like, we'll only update the like count in our Redis "Likes" index when the count reaches specific milestones (e.g., powers of two). This significantly reduces write frequency, at the cost of the index being an approximation. To provide accurate, up-to-date like counts for sorting, when retrieving search results, we'll fetch a larger set of potential results from the approximate "Likes" index and then query a dedicated Like Service for the precise, current like counts for these posts before the final sorting and ranking. This two-stage approach balances write efficiency with read accuracy.
+- To **optimize storage**, we can implement a tiered approach. First, we'll cap the size of our inverted indexes (e.g., to 1k-10k post IDs per keyword), significantly reducing storage for common terms. Second, we'll identify rarely searched keywords based on usage analytics and move their corresponding indexes from our in-memory Redis to cheaper, less frequently accessed blob storage like S3 or R2. When a search query comes in, we'll first check Redis. If the keyword's index isn't found, we'll retrieve it from blob storage, incurring a slight latency penalty for these less common searches. This strategy balances query performance for popular terms with cost-effective storage for the vast majority of less frequently accessed data.
+
+
+
 ## Aggregation Systems
 These focus on processing and ranking high-cardinality data.
 
@@ -638,3 +649,70 @@ These focus on processing and ranking high-cardinality data.
 - **Why Count-Min + Redis?**: Count-min scales for high cardinality, and Redis ensures low-latency ranking.
 - **Scalability Estimates**: Supports ~100K events/sec, ~1B daily events, and ~10K QPS for rankings with Redis and Spark scaling.
 - **Latency/Throughput Targets**: Target <50ms for event updates, <500ms for rankings, and ~50K events/sec processing.
+## System Architecture and Data Ingestion
+The architecture leverages a Lambda Architecture, combining a fast path for approximate, low-latency results and a slow path for accurate, batch-processed results.
+Data ingestion begins with an API Gateway, which serves as the entry point for user requests (e.g., video views) and generates logs for each request. These logs capture events like video identifiers and are used to count frequencies.
+To optimize resource usage, a background process on the API Gateway aggregates events into a small, in-memory hash table (frequency counts) for a short period (e.g., seconds) or until a size limit is reached, then flushes the data in a compact binary format to reduce network I/O. Alternatively, if API Gateway is resource-constrained, log parsing and aggregation can be offloaded to a dedicated log processing cluster.
+Aggregated data is sent to a Distributed Messaging System like Apache Kafka, which partitions messages randomly across nodes to distribute load uniformly. Kafka's fault tolerance (via replication and retention, e.g., 7 days) ensures no data loss, enabling reprocessing if needed. This message bus also supports decoupling between producers (ingestion) and consumers (fast/slow processors), allowing horizontal scalability and backpressure handling.
+## Fast Path (Approximate Results)
+The fast path prioritizes low-latency, approximate results for short intervals (e.g., 1-5 minutes).
+A Fast Processor service consumes Kafka messages and uses a Count-Min Sketch data structure to aggregate frequencies in memory. Count-Min Sketch is a fixed-size, two-dimensional array (e.g., thousands of columns, 5 rows for hash functions) that approximates frequency counts with bounded memory, even for large datasets.
+Each event (e.g., video view) is hashed by multiple functions, incrementing corresponding cells. Collisions may overestimate counts, but taking the minimum value across hash functions reduces errors. The Fast Processor maintains a min-heap to track the top k items, updating it as events are processed.
+Every few seconds, the Count-Min Sketch and top k list are flushed to a Storage Service, which stores results in a database (e.g., for 1-minute intervals). Since Count-Min Sketch has a fixed size, data partitioning is unnecessary, simplifying the system and avoiding replication complexities.
+However, approximate results tolerate some data loss (e.g., from host failures) as the slow path provides accurate results later. This path reduces request rates progressively: millions of events at the API Gateway are aggregated into fewer messages in Kafka, further reduced by Fast Processors, and stored as compact top k lists.
+Count-Min Sketch merging is straightforward (element-wise sum), enabling distributed aggregation without coordination overhead.
+## Slow Path (Accurate Results)
+The slow path ensures precise results for longer intervals (e.g., 1-hour or 1-day) using batch processing.
+A Data Partitioner reads Kafka messages, parses them into individual events, and routes each event (e.g., video identifier) to a specific partition in another Kafka cluster, sharded by video ID. To handle hot partitions (e.g., popular videos), the Partitioner dynamically reassigns high-traffic IDs (e.g., by appending a random suffix).
+Partition Processors read from each Kafka partition, aggregating data in memory for a longer period (e.g., 5 minutes), then batch it into files stored in a Distributed File System (e.g., HDFS or S3).
+Two MapReduce jobs process these files:
+1. The first computes frequency counts for each video
+2. The second calculates the top k list
+The Frequency Count job maps events to key-value pairs (video ID, count), shuffles and sorts by key, and reduces by summing counts. The Top K job maps frequency data into local top k lists per chunk, then reduces them into a final top k list. Results are stored in the Storage Service.
+Kafka's replication ensures data durability, and MapReduce's fault tolerance (via task retries) guarantees accurate processing, though results are delayed (minutes to hours).
+Optionally, Apache Spark can replace MapReduce if faster job completion is desired, especially for iterative workflows or near-real-time windows.
+## Data Retrieval
+The API Gateway exposes a topK API to retrieve the top k list for a specified time interval. Requests are routed to the Storage Service, which queries its database.
+- For short intervals (e.g., last 5 minutes), the system merges multiple 1-minute approximate lists from the fast path
+- For exact 1-hour intervals, it retrieves precise lists from the slow path
+- For custom intervals (e.g., 2 hours), merging hourly lists may yield approximate results, as precise computation requires the full dataset
+Retrieval is optimized for low latency (tens of milliseconds) by pre-computing and storing top k lists, avoiding on-the-fly calculations. Large queries may result in approximations due to list merging limitations, and k should be bounded (e.g., a few thousand) to prevent performance degradation during merge operations.
+## Scalability and Performance
+The system scales to handle millions of requests per second:
+- The API Gateway cluster (thousands of hosts) distributes load via load balancing
+- Kafka's partitioning and horizontal scaling manage high-throughput event streams
+- Fast Processors scale by adding hosts, as Count-Min Sketch eliminates partitioning needs
+- Partition Processors scale with Kafka shards, and MapReduce jobs leverage distributed computing
+- The Storage Service uses a horizontally scaled database, potentially sharded by time interval or item ID
+To handle data skew (e.g., popular videos), dynamic partitioning and load balancing mitigate hot spots.
+Latency targets include:
+- <100ms for event ingestion
+- <1s for fast path results
+- Minutes for slow path results
+Throughput supports ~100K-1M events/sec, with k values up to several thousand (larger k may degrade performance due to merging costs). Sketch dimensions (width/height) can be tuned based on error tolerance and memory availability to balance performance and precision.
+## Fault Tolerance and Accuracy
+Kafka's replication and retention ensure no data loss, allowing reprocessing if Fast or Partition Processors fail. The slow path's MapReduce jobs provide accurate results by processing the full dataset, reconciling any fast path inaccuracies.
+For critical accuracy, periodic batch jobs can reprocess raw data from the Distributed File System to validate Storage Service data. The fast path sacrifices accuracy for speed, using Count-Min Sketch's probabilistic guarantees (tuned via width/height parameters for desired error bounds).
+High availability is achieved via Kafka replication and database redundancy, though fast path data loss is tolerable due to slow path recovery. Recovery strategies include data replay from Kafka, and re-computation via scheduled MapReduce pipelines.
+## Edge Cases and Optimizations
+**Hot Partitions:** Dynamic repartitioning in the Data Partitioner mitigates skew from popular items.
+**Delayed Events:** Event-time processing in Partition Processors (using Kafka timestamps) handles out-of-order events.
+**Duplicate Events:** Idempotency keys (e.g., unique request IDs) in the API Gateway prevent double-counting.
+**Large k Values:** Limit k to thousands to avoid performance degradation in merging or storage.
+**Resource Constraints:** If API Gateway hosts lack capacity for aggregation, offload log parsing to a separate cluster.
+**Data Volume:** For massive datasets, increase Kafka partitions, Fast Processor hosts, or MapReduce nodes.
+**Monitoring:** Track ingestion latency, Kafka lag, Fast Processor accuracy (via sampling), MapReduce job completion time, Storage Service query latency, and top k list consistency (via reconciliation jobs). Alert on high partition skew or database bottlenecks.
+## Trade-offs
+**Count-Min Sketch vs. Hash Table:** Count-Min Sketch uses fixed memory but is approximate; hash tables are accurate but memory-intensive. Use Count-Min Sketch for fast path simplicity.
+**Fast vs. Slow Path:** Fast path is simple and low-latency but approximate; slow path is accurate but complex and slow. Combine both for flexibility.
+**Kafka vs. Kinesis:** Kafka is robust for high-throughput streams; Kinesis is managed but costlier. Use Kafka for control and scale.
+**MapReduce vs. Spark:** MapReduce is reliable for batch; Spark is faster for iterative processing. Use MapReduce for simplicity, Spark for speed if needed.
+## Why Lambda Architecture?
+The dual-path approach balances real-time (fast path) and accurate (slow path) requirements, leveraging Count-Min Sketch for simplicity and MapReduce for precision. Kafka ensures scalable ingestion, and the Storage Service enables fast retrieval.
+While Lambda Architecture adds complexity, it offers flexibility and robustness, and is preferred in systems where both speed and correctness matter.
+## Alternatives
+A single-path solution using Kafka and Apache Spark could simplify the architecture by partitioning data and aggregating in-memory top k lists, but it may struggle with massive datasets or long intervals without batch processing.
+Count-Min Sketch alternatives (e.g., Lossy Counting, Space Saving) offer similar trade-offs but may require more tuning.
+## Applications
+This design applies to trending services (e.g., Google Trends, X Trends), DDoS protection (identifying top IP addresses), or financial systems (most traded stocks), making it versatile for frequency-based analytics at scale.
+The same architecture can extend to any high-frequency event stream where frequency over time matters, such as ad impressions, page hits, or telemetry.
