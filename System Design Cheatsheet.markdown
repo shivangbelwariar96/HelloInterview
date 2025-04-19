@@ -727,3 +727,291 @@ Count-Min Sketch alternatives (e.g., Lossy Counting, Space Saving) offer similar
 **Applications**
 This design applies to trending services (e.g., Google Trends, X Trends), DDoS protection (identifying top IP addresses), or financial systems (most traded stocks), making it versatile for frequency-based analytics at scale.
 The same architecture can extend to any high-frequency event stream where frequency over time matters, such as ad impressions, page hits, or telemetry.
+
+
+
+# Distributed Message Queue System Design
+
+## Overview and Requirements
+
+A distributed message queue enables asynchronous communication between producers and consumers by decoupling message generation from consumption. Unlike synchronous communication, where a producer must wait for the consumer to process a request, a queue stores the message and allows the consumer to retrieve it later. 
+
+This provides better resilience to consumer failures, backpressure, and varying consumption speeds. The queue is distributed in nature, meaning its messages and operations span multiple servers or data centers for scalability and availability. The queue guarantees that each message is consumed by exactly one consumer, which differentiates it from a publish-subscribe topic model where all subscribers receive the same message.
+
+**Functional requirements** include:
+- APIs to send and receive messages
+- Optionally, APIs to create or delete queues and delete messages
+
+**Non-functional requirements** include:
+- Scalability to handle high throughput
+- High availability across data centers
+- Performance for low-latency operations
+- Durability to persist messages safely
+- Observability for both system operators and queue clients
+
+## System Architecture and Frontend Layer
+
+The system uses a layered architecture that includes:
+- A virtual IP (VIP)
+- Load balancer
+- A stateless FrontEnd web service
+- A Metadata service for queue configuration
+- A Backend service that handles actual message persistence and delivery
+
+DNS resolution maps the queue domain name to one of multiple VIPs, which load balance traffic to FrontEnd servers. To achieve high availability and scale, multiple load balancers are deployed with primary-secondary failover and DNS-based A record partitioning.
+
+The FrontEnd service, spread across data centers, handles:
+- SSL termination (often via a local proxy)
+- Authentication and authorization
+- Parameter validation
+- Request deduplication (to support idempotency)
+- Rate limiting (typically via leaky bucket)
+- Request routing
+- Caching
+- Usage metrics
+- Server-side encryption of message payloads
+
+The goal is to keep this layer as stateless and lightweight as possible, pushing heavy responsibilities to specialized services behind it. When a message is sent, the FrontEnd consults the Metadata service to identify backend storage responsibilities, then forwards the encrypted message to a selected backend node or cluster.
+
+## Metadata Layer and Queue Configuration
+
+The Metadata service maintains configuration and metadata for each queue, such as creation time, owner, and access controls. It is backed by a persistent store and includes an in-memory caching layer for read efficiency.
+
+There are three caching strategies:
+1. Fully replicated cache (all nodes hold the same data)
+2. Sharded cache with FrontEnd-aware routing (FrontEnd knows which shard to contact)
+3. Sharded cache with indirection (FrontEnd queries any Metadata host, which then reroutes to the correct shard)
+
+The latter two options rely on consistent hashing to distribute metadata and balance the load. This Metadata service is consulted for each message operation to ensure correct backend routing and enforcement of queue semantics.
+
+## Backend Layer and Message Storage
+
+The backend service is the heart of the message queue system. It handles message ingestion, replication, persistence, visibility timeout management, and cleanup.
+
+Two key architectural models are considered:
+
+### Model 1: Single Leader
+Each queue has a single leader backend host responsible for both send and receive operations, and that leader handles replication to followers and message cleanup. This requires a cluster-level coordination service, called In-cluster Manager, to maintain mappings between queues, leaders, and followers. It also handles leader election, failure detection, and rebalancing when instances join or leave.
+
+### Model 2: Leaderless
+This model avoids explicit leaders by organizing backend instances into small clusters. Queues are mapped to entire clusters, and requests can go to any instance, which replicates messages internally. This requires an Out-cluster Manager to maintain mappings between queues and clusters, and to monitor cluster health, utilization, and partitioning for oversized queues.
+
+Large queues may be sharded across leaders or clusters to spread the load. In either model, replication can be synchronous (wait for all copies before acknowledging producer) or asynchronous (acknowledge once written to one node), each with its trade-offs in latency and durability.
+
+## Message Lifecycle and Visibility
+
+Message deletion strategies vary based on use cases:
+- One option delays deletion until a consumer explicitly confirms processing (e.g., via deleteMessage API)
+- Another is based on visibility timeout, where consumed messages become temporarily invisible and reappear if not confirmed within the timeout (used in Amazon SQS)
+- Alternatively, Apache Kafka retains all messages and relies on the consumer to track offsets
+
+These differences impact delivery semantics:
+- At-most-once (possible loss, never duplicated)
+- At-least-once (no loss, but possible duplication)
+- Exactly-once (no loss or duplication, but harder to guarantee in practice due to failures and retries at multiple stages)
+
+Most distributed queues settle for at-least-once delivery as a practical trade-off. Ordering is another concern; strict FIFO across a distributed system is costly, so many implementations either avoid it or provide only partition-level ordering to balance throughput.
+
+## Scalability and Durability Considerations
+
+The system is built to scale horizontally across all layers. Load balancers, FrontEnd instances, Metadata shards, and backend clusters can each scale independently. Partitioning strategies and replication mechanisms ensure both high availability and throughput.
+
+Backend hosts use memory for recent messages and local disk for durability. For long-term retention or compliance, data may be backed by persistent storage. Queue-to-cluster assignments can be rebalanced as usage patterns evolve. Hot queues (those with large message volume) may be dynamically partitioned to spread the load and avoid bottlenecks.
+
+## Security and Observability
+
+Communication between components and with clients is secured via SSL/TLS. Messages are encrypted at rest immediately upon ingestion at the FrontEnd layer. Proper access control ensures that only authorized producers and consumers can interact with specific queues.
+
+Observability includes metric emission and structured logging at every layer. Monitoring systems ingest these logs and metrics to provide real-time health dashboards and alerts. In addition, queue clients should have visibility into the state of their queues (e.g., message count, delivery lag), enabling them to tune consumption rates or scale consumers.
+
+Key metrics include:
+- Message ingress rate
+- Processing latency
+- Replication lag
+- Error counts
+
+These are vital for both system operators and clients to ensure smooth operation.
+
+## Advanced Features and Design Choices
+
+The system supports both push and pull models for message delivery:
+- In the pull model, consumers poll for messages periodically
+- In the push model, backend services notify consumers when new messages arrive
+
+While push is more efficient from the consumer's standpoint, pull is simpler to implement and provides better control in high-throughput environments.
+
+Additionally, queue creation can be explicit (via an API call) or implicit (auto-created upon first use). Deletion is often restricted or available only via secure CLI interfaces to prevent accidental data loss.
+
+Each component is designed for fault tolerance, with failover and heartbeat-based health checks to ensure that the system can sustain partial failures and continue processing messages.
+
+## Evaluation
+
+The resulting architecture meets the primary non-functional requirements:
+- It is scalable (by design, via sharded and replicated components)
+- Highly available (multi-data-center redundancy)
+- Performant (through caching, asynchronous flows, and distributed routing)
+- Durable (via configurable replication and disk persistence)
+
+Each component has a clearly defined responsibility and is designed for modular growth. The system can support massive throughput and varied use cases, from real-time log ingestion to decoupling microservices in complex architectures.
+
+## Applications
+
+Distributed message queues are a critical component in many modern systems. They serve as:
+- The glue between services in microservice architectures
+- The foundation for log and event pipelines
+- Building blocks for eventual consistency and retries
+
+This design is suitable for both internal infrastructure (e.g., task scheduling, audit trails) and external APIs (e.g., cloud queues like AWS SQS, Google Pub/Sub). It forms the backbone of fault-tolerant, loosely coupled systems at scale.
+
+
+
+
+# Notification Service System Design
+
+## Overview
+
+To build a notification service that delivers messages from publishers to subscribers in response to events, like credit card transaction alerts or API fault notifications, we'll design a system that's scalable, highly available, fast, and durable. 
+
+The service will support three core APIs:
+- Creating topics (named buckets for messages)
+- Publishing messages to topics
+- Subscribing to topics to receive messages
+
+## System Architecture
+
+### Frontend Layer
+
+We'll begin with a load balancer to evenly distribute requests from publishers and subscribers to a FrontEnd service, which handles:
+- Request validation
+- Authentication
+- Authorization
+- SSL termination
+- Caching
+- Throttling
+- Deduplication
+- Usage data collection
+
+To keep the FrontEnd lightweight and responsive, we'll offload log processing to separate agents that aggregate and transfer logs asynchronously for monitoring and auditing, ensuring the service remains robust under high load.
+
+### Metadata Service
+
+Metadata about topics and subscriptions will be stored in a Metadata service, a distributed cache that shields the database (e.g., PostgreSQL) and provides fast access to topic and subscriber details.
+
+The Metadata service partitions data across hosts using a consistent hashing ring, with FrontEnd hosts computing an MD5 hash (based on topic name and owner ID) to locate the appropriate Metadata host.
+
+To manage host discovery, we'll consider two options:
+1. **Configuration service** - Tracks Metadata hosts via heartbeats and maps hash ranges
+2. **Gossip protocol** - FrontEnd hosts dynamically discover Metadata hosts through peer-to-peer data sharing
+
+The Gossip protocol avoids a coordinator's single point of failure, enhancing availability, while both approaches scale to support millions of topics, making this a great discussion point with the interviewer.
+
+### Temporary Storage Service
+
+Messages published to topics will be held in a Temporary Storage service, designed to store messages briefly when subscribers are available or for days if retries are needed due to subscriber unavailability.
+
+To meet demands for speed, scalability, high availability, and persistence, we'll explore multiple storage options:
+
+1. **NoSQL key-value or column store** like Apache Cassandra or Amazon DynamoDB is suitable, as we don't need:
+   - ACID transactions
+   - Complex queries
+   - Document/graph capabilities
+   - Messages are small (e.g., <1 MB)
+
+2. **In-memory store** like Redis with persistence could provide low latency
+
+3. **Distributed message queue** like Apache Kafka or Amazon Kinesis could leverage partitioning and replication for scalability and durability
+
+Kafka, for instance, aligns well with our needs, and discussing these options—databases, in-memory stores, or message queues—shows depth and allows us to weigh trade-offs with the interviewer.
+
+### Sender Service
+
+The Sender service will retrieve messages from Temporary Storage and deliver them to subscribers, using a thread pool to read messages efficiently.
+
+To avoid overwhelming Temporary Storage, we'll use semaphores to dynamically adjust the number of retrieval threads based on idle threads and desired read rates, helping Temporary Storage recover during performance issues.
+
+After retrieving a message, the Sender queries the Metadata service for subscriber details (e.g., HTTP endpoints, email addresses) instead of storing them with the message, preventing Temporary Storage from bloating and avoiding the need for a document database.
+
+#### Task Creator and Executor
+
+For delivering messages to multiple subscribers in parallel, we'll use Task Creator and Executor components:
+- **Task Creator** splits delivery into individual tasks per subscriber
+- **Executor** manages these tasks with a thread pool (e.g., Java's ThreadPoolExecutor), using semaphores to control execution
+
+If threads are unavailable, tasks are deferred, and the message is returned to Temporary Storage for another Sender host to process, ensuring resilience against slow hosts.
+
+## Delivery Guarantees and Policies
+
+To guarantee at-least-once delivery, the Sender will retry failed deliveries for hours or days until successful or a retry limit is reached, with subscribers able to define retry policies or redirect undelivered messages to a monitoring system for manual review.
+
+To prevent spam, subscribers must confirm subscriptions via a confirmation message to their endpoint or email.
+
+The FrontEnd service deduplicates publisher submissions, but subscribers must handle potential duplicates from retries caused by network or internal issues.
+
+The system doesn't guarantee message order, as delivery tasks run independently, and retries or slow Sender hosts may disrupt sequence numbers or timestamps.
+
+## Security and Monitoring
+
+Security is prioritized with:
+- Authentication for publishers
+- Registration for subscribers
+- SSL encryption for messages in transit and at rest
+
+Monitoring will track:
+- Service health (e.g., request latency, delivery failures)
+- Customer metrics (e.g., pending messages)
+
+This integrates with a monitoring system for comprehensive visibility.
+
+## System Features
+
+### Aggregation
+- The FrontEnd aggregates logs for monitoring
+- The Metadata service caches topic and subscriber data
+- The Sender processes messages via parallel tasks
+
+### Scheduling
+- Retry failed deliveries based on subscriber-defined policies or retry limits
+
+### Edge Cases
+- Handle duplicates (FrontEnd deduplication, subscriber-side retry handling)
+- Slow subscribers (task isolation)
+- High throughput (scale Kafka and Sender)
+- Unavailable subscribers (persistent storage with retries)
+- Large subscriber lists (Metadata service caching)
+
+### Monitoring
+- Track request latency
+- Delivery success rate
+- Temporary Storage performance
+- Metadata cache hit rate
+- Customer metrics like messages awaiting delivery
+
+## Trade-offs
+
+- **Kafka vs. RabbitMQ**: Kafka scales better than RabbitMQ for high-throughput messaging but is more complex to manage
+- **Cassandra/DynamoDB vs. Redis**: Cassandra or DynamoDB provides durable, scalable storage, while Redis offers low latency but requires persistence for durability
+- **Gossip Protocol vs. Configuration Service**: The Gossip protocol for Metadata host discovery is decentralized but complex, whereas a Configuration service is simpler but introduces a coordinator
+- **Task-based vs. Sequential Delivery**: Task-based delivery isolates slow subscribers but adds complexity compared to sequential delivery
+- **Single Queue Architecture**: A single Kafka-based queue could simplify the architecture but may need tuning for massive subscriber lists
+
+## Why Kafka + Task-Based Sender?
+
+Kafka provides scalable, durable message storage and ingestion, while the task-based Sender ensures efficient, parallel delivery to large subscriber groups, meeting the notification service's requirements.
+
+## Scalability Estimates
+
+- Supports ~1M messages/sec
+- ~1B daily messages
+- ~10K QPS for topic/subscription operations with Kafka, Sender, and database scaling
+
+## Latency/Throughput Targets
+
+- <100ms for message ingestion
+- <1s for delivery to available subscribers
+- <50ms for metadata queries
+- ~1M messages/sec processing
+
+This design is adaptable to other fan-out data delivery systems, such as event-driven architectures or real-time alerting, making it a robust solution for system design interviews. All critical details from the document are covered, including the architecture, components, non-functional requirements (scalability, availability, performance, durability), and edge cases like duplicates, retries, and security.
+
+
+
