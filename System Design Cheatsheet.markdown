@@ -1,5 +1,67 @@
 # System Design Cheatsheet
 
+
+
+## 1. Bloom Filter  
+**What it is:** A probabilistic data structure used to test whether an element is likely in a set.  
+**What it does:** Answers "Is this element in the set?" with possible false positives but no false negatives.  
+**How it works:** Uses a bit array of size \( m \) and \( k \) hash functions. To add an element, hash it with \( k \) functions, set corresponding bits to 1. To check membership, hash the element and verify if all bits are 1. False positives occur due to shared bits, but false negatives are impossible.  
+**Pros:** Space-efficient, fast O(k) lookup and insertion, no false negatives.  
+**Cons:** False positives possible (depends on \( m \), \( k \), and #elements), cannot remove elements (standard version), cannot retrieve elements.  
+**Real-world examples:**  
+- *Google Bigtable:* Reduces disk lookups for missing rows/columns.  
+- *Apache Cassandra:* Checks SSTables for presence before disk access.  
+- *CDNs (e.g., Akamai):* Caches URL checks to reduce redundant requests.  
+- *Malware detection:* Google Safe Browsing uses it for URL blacklist checks.
+
+---
+
+## 2. Count-Min Sketch  
+**What it is:** A probabilistic structure for estimating frequency of elements in a data stream.  
+**What it does:** Tracks approximate counts with bounded error.  
+**How it works:** Uses a 2D array \( d \times w \) and \( d \) hash functions. To increment count, hash with \( d \) functions, increment respective cells. To query, hash and take the min across \( d \) cells. Overestimates possible (due to collisions), underestimates not.  
+**Pros:** Sublinear space, fast O(d) updates/queries, good for high-volume streams.  
+**Cons:** Overestimation from collisions, error depends on \( w \), \( d \), cannot delete easily.  
+**Real-world examples:**  
+- *Network monitoring:* Cisco tracks flow sizes.  
+- *Ad tech:* Google/Facebook estimate clicks/impressions.  
+- *Streaming analytics:* Kafka/Spark for approximate frequency counts.  
+- *DDoS detection:* Cloudflare tracks request frequency to detect anomalies.
+
+---
+
+## 3. HyperLogLog  
+**What it is:** A probabilistic structure to estimate cardinality (distinct elements).  
+**What it does:** Approximates number of unique items with high accuracy and low memory.  
+**How it works:** Hash each item, count leading zeros in binary form, store max per register. Use harmonic mean of registers to estimate total cardinality.  
+**Pros:** Extremely space-efficient (~12 KB for billions of items), constant memory, fast O(1) operations.  
+**Cons:** Approximate (~2% error), no access to exact counts or elements, merging requires parameter alignment.  
+**Real-world examples:**  
+- *Redis:* Unique site visitor counts.  
+- *Google Analytics:* Tracks unique users/events.  
+- *Social media:* Twitter/Facebook count unique impressions.  
+- *Databases:* PostgreSQL/BigQuery use it for `approx_distinct()` functionality.
+
+---
+
+## Summary Table
+
+| Structure          | Purpose              | Mechanism                  | Pros                               | Cons                                | Real-world Uses                        |
+|--------------------|----------------------|-----------------------------|------------------------------------|-------------------------------------|----------------------------------------|
+| **Bloom Filter**   | Membership testing   | Bit array, multiple hashes  | Space-efficient, fast, no false negatives | False positives, no deletions        | Bigtable, Cassandra, CDNs, Safe Browsing |
+| **Count-Min Sketch** | Frequency estimation | 2D array, min of hashed cells | Sublinear space, fast, stream-friendly | Overestimation, approximate           | Network monitoring, ad tech, DDoS detection |
+| **HyperLogLog**    | Cardinality estimation | Hash-based leading zeros   | Minimal memory, fast, scalable      | Approximate, no exact counts         | Redis, Google Analytics, social media   |
+
+These structures trade accuracy for efficiency, ideal for large-scale, resource-constrained systems where performance and scalability outweigh exactness.
+
+
+
+
+
+
+
+
+
 ## Read-Heavy Systems
 These prioritize low-latency data retrieval, efficient caching, and scalability.
 
