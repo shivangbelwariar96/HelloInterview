@@ -1,3 +1,5 @@
+https://github.com/shivangbelwariar96/HelloInterview/blob/main/Numbers-To-Remember.md
+
 # System Design Cheatsheet
 
 This cheatsheet covers key system design concepts, data structures, and real-world applications, focusing on scalability, latency, and trade-offs. It includes probabilistic data structures, read-heavy systems, write-heavy systems, strong consistency systems, trie/proximity systems, aggregation systems, and distributed systems. Each section provides improvements, examples, and metrics, with added CAP theorem context, failure modes, cost considerations, and security best practices. A glossary and new sections (Distributed File System, Distributed Lock Manager, Event Sourcing System, API Gateway) enhance completeness.
