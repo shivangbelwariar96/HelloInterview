@@ -1,6 +1,34 @@
 https://github.com/shivangbelwariar96/HelloInterview/blob/main/Numbers-To-Remember.md
 
 
+# gRPC vs REST Comparison
+
+| Aspect | gRPC | REST |
+|--------|------|------|
+| **Protocol** | Uses HTTP/2, enabling multiplexed streams over a single TCP connection (multiple requests/responses simultaneously). This reduces latency. | Uses HTTP/1.1, where each request opens a new TCP connection or is pipelined; lacks multiplexing, resulting in higher overhead. |
+| **Example** | A single gRPC connection can handle 100+ RPCs in parallel between microservices. | REST APIs often queue or open multiple connections under high load (e.g., RESTful weather API). |
+| **Data Format** | Uses Protocol Buffers (protobuf) — compact, binary, schema-defined. Much faster serialization/deserialization. | Uses JSON or XML — human-readable but more verbose and slower to parse. |
+| **Example** | `message User { string name = 1; int32 id = 2; }` in proto vs JSON: `{"name": "John", "id": 2}` — Protobuf is ~10x smaller and faster to transmit. | REST APIs like Twitter or GitHub serve JSON responses that are easily debugged or tested with tools like Postman or browser dev tools. |
+| **Speed & Efficiency** | gRPC is significantly faster in both network latency and payload size. It's ideal for high-throughput internal communication. | REST is slower due to verbose payloads and lack of compression, but acceptable for most public-facing APIs. |
+| **Benchmark Example** | In Netflix's case study, switching internal APIs from REST to gRPC improved payload efficiency by 60% and reduced response times by 30–50%. | A public REST API might deliver a 100KB JSON payload where gRPC would send a 10KB protobuf equivalent. |
+| **Streaming** | gRPC supports client, server, and bidirectional streaming natively via HTTP/2 streams, making it ideal for chat, video, or data pipelines. | REST doesn't support native streaming. Workarounds like long polling, Server-Sent Events (SSE), or WebSockets are needed, each with limitations. |
+| **Example** | Real-time fraud detection service streams transactions over gRPC for instant decisions. | REST API for stock prices may use polling or websockets for updates, which adds complexity. |
+| **Contract** | Uses .proto files for strict typing and auto-generation of code. Ensures forward/backward compatibility. | REST typically lacks strict typing; OpenAPI/Swagger is used to document and sometimes validate endpoints, but not enforced across systems. |
+| **Example** | protoc generates client/server code from .proto, guaranteeing consistency. | Swagger UI can document REST endpoints but does not enforce implementation correctness without external tooling. |
+| **Tooling** | Protobuf compiler generates strongly typed client/server code in languages like Go, Java, Python, C++, etc. | REST client libraries like axios, fetch, requests are manually used to consume APIs. Tooling like Postman helps, but isn't tightly integrated. |
+| **Example** | gRPC stub for UserService in Java or Python can be invoked directly as a method call, just like local objects. | REST: You construct URLs like GET /user/123, parse JSON responses, handle errors manually. |
+| **Browser Support** | Browsers don't support gRPC natively due to HTTP/2 binary framing. Requires gRPC-Web or proxy layers like Envoy to convert HTTP/1 to HTTP/2. | Full native browser support — you can test REST APIs directly in browser tabs, use fetch() or tools like cURL without extra layers. |
+| **Example** | A web dashboard that calls gRPC APIs must go through gRPC-Web + Envoy setup. | JavaScript `fetch('/api/user/123')` works out of the box. |
+| **Interoperability** | Limited to systems that support gRPC and Protocol Buffers. Less friendly to 3rd-party devs without protobuf setup. | REST is universally supported — any device with HTTP stack can consume a REST API. |
+| **Example** | IoT or legacy systems struggle with gRPC; REST can be consumed by Arduino or a cURL call on a router. | Stripe and Twilio provide REST APIs that any developer can use with zero setup. |
+| **Use Cases** | Internal microservices, low-latency systems, streaming pipelines, mobile/backend comms. | Public APIs, third-party integrations, web services, or where simplicity and wide adoption matter. |
+| **Example** | Google uses gRPC internally for most services; Kubernetes uses gRPC for kubelet API. | Facebook Graph API or OpenWeatherMap REST API used in frontend apps or integrations. |
+| **Error Handling** | Standardized gRPC status codes like UNAVAILABLE, NOT_FOUND, INTERNAL. Automatically handled by gRPC clients. | REST uses HTTP status codes (e.g., 200, 404, 500), but payload structure is usually custom and inconsistent across APIs. |
+| **Example** | A gRPC call might return Status.UNAVAILABLE and auto-retry via built-in client policy. | A REST call returning 500 might include a JSON error body you must parse manually: `{"error": "Database down"}`. |
+
+
+
+
 
 # System Design Cheatsheet
 
