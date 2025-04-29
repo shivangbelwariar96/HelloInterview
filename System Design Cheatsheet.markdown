@@ -28,20 +28,30 @@ https://github.com/shivangbelwariar96/HelloInterview/blob/main/Numbers-To-Rememb
 
 
 
+# HTTP Streaming
+
 An HTTP stream refers to a communication model where data is sent continuously over a single HTTP connection, rather than in discrete, complete responses. Instead of waiting for the entire response to be generated, the server pushes data incrementally to the client as it becomes available.
 
-Use Cases
+## Use Cases
 
 HTTP streaming is useful when:
-	•	You want to send real-time updates without re-establishing connections repeatedly.
-	•	The response is large or long-running, and you want to start processing parts of it early.
-	•	You’re building systems like chat apps, video/audio streaming, server-sent events, or log tailing tools.
+- You want to send real-time updates without re-establishing connections repeatedly.
+- The response is large or long-running, and you want to start processing parts of it early.
+- You're building systems like chat apps, video/audio streaming, server-sent events, or log tailing tools.
 
-How It Works
-	•	A client makes an HTTP request.
-	•	The server holds the connection open and keeps writing to the response body as data becomes available.
-	•	The client reads chunks of the response without waiting for the entire message.
+## How It Works
+- A client makes an HTTP request.
+- The server holds the connection open and keeps writing to the response body as data becomes available.
+- The client reads chunks of the response without waiting for the entire message.
 
+## Types of HTTP Streaming
+
+| Type | Description |
+|------|-------------|
+| **Chunked Transfer Encoding (HTTP/1.1)** | Server sends response in chunks, without specifying total size upfront. |
+| **Server-Sent Events (SSE)** | One-way server-to-client stream over HTTP. Ideal for notifications. |
+| **HTTP/2 Streams** | Allows multiplexed, bi-directional streams on a single TCP connection. |
+| **WebSockets (Not HTTP Streaming)** | Uses HTTP for handshake but switches to a full-duplex TCP stream. |
 
 
 # System Design Cheatsheet
