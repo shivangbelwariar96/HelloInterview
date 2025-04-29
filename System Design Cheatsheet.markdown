@@ -28,6 +28,20 @@ https://github.com/shivangbelwariar96/HelloInterview/blob/main/Numbers-To-Rememb
 
 
 
+An HTTP stream refers to a communication model where data is sent continuously over a single HTTP connection, rather than in discrete, complete responses. Instead of waiting for the entire response to be generated, the server pushes data incrementally to the client as it becomes available.
+
+Use Cases
+
+HTTP streaming is useful when:
+	•	You want to send real-time updates without re-establishing connections repeatedly.
+	•	The response is large or long-running, and you want to start processing parts of it early.
+	•	You’re building systems like chat apps, video/audio streaming, server-sent events, or log tailing tools.
+
+How It Works
+	•	A client makes an HTTP request.
+	•	The server holds the connection open and keeps writing to the response body as data becomes available.
+	•	The client reads chunks of the response without waiting for the entire message.
+
 
 
 # System Design Cheatsheet
