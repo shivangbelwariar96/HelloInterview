@@ -1,5 +1,53 @@
 https://www.hellointerview.com/learn/system-design/deep-dives/numbers-to-know
 
+# System Design Conversion Cheat Sheet
+
+## Data Units (Storage/Bandwidth)
+
+| Unit | Equivalent in Bytes           | Notes                    |
+|------|-------------------------------|--------------------------|
+| 1 KB | 1,024 Bytes                   | Use binary (not 1,000)   |
+| 1 MB | 1,024 KB = 1,048,576 Bytes    |                          |
+| 1 GB | 1,024 MB ≈ 1 Billion Bytes    |                          |
+| 1 TB | 1,024 GB                      |                          |
+| 1 PB | 1,024 TB                      |                          |
+
+---
+
+## Number Units (Users, Operations, Money)
+
+| Unit       | Value         |
+|------------|---------------|
+| 1 Thousand | 10³ = 1,000   |
+| 1 Million  | 10⁶ = 1,000,000 |
+| 1 Billion  | 10⁹ = 1,000,000,000 |
+| 1 Trillion | 10¹² = 1,000,000,000,000 |
+
+---
+
+## Quick Mental Conversions
+
+| Concept                        | Approximation / Formula             |
+|--------------------------------|-------------------------------------|
+| 1 GB                           | ≈ 1 Billion Bytes (10⁹)             |
+| 1 TB                           | ≈ 1,000 GB = 8 Trillion bits        |
+| 1 GBps                         | ≈ 8 Gbps                            |
+| 1 Gbps                         | ≈ 125 MB/s                          |
+| Requests per Second (RPS)     | = Requests per Day / 86,400         |
+| 1 Million req/day              | ≈ 11.6 RPS                          |
+| 100 Million req/day           | ≈ 1,157 RPS                         |
+
+---
+
+## Handy Estimations
+
+- **1 KB ≈ 1,000 Bytes**
+- **1 MB ≈ 1 Million Bytes**
+- **1 GB ≈ 1 Billion Bytes**
+- **Multiply MB/s by 8 to get Mbps**
+
+
+
 
 # System Components: Key Metrics and Scale Triggers
 
