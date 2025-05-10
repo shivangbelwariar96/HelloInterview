@@ -121,7 +121,9 @@ These structures trade accuracy for efficiency, ideal for large-scale, resource-
 ## Read-Heavy Systems
 These prioritize low-latency data retrieval, efficient caching, and scalability.
 
---- 
+---
+---
+
 ### 1. URL Shortener (Bitly)
 
 **Key Generation:**  
@@ -218,6 +220,7 @@ Alert on spikes in latency, redirect failures, cache miss anomalies.
 - Async analytics writes  
 - Batch writes for efficiency
 ---
+---
 
 
 
@@ -238,6 +241,7 @@ Alert on spikes in latency, redirect failures, cache miss anomalies.
 - **Scalability Estimates**: Handles ~5K image uploads/sec, ~10M daily active users, and ~1PB storage with S3 scaling and CDN caching.
 - **Latency/Throughput Targets**: Target <100ms for image retrieval, <500ms for uploads, and ~5K requests/sec for downloads.
 
+---
 ---
 
 # Social Media Platform Design (Twitter/Facebook)
@@ -367,6 +371,7 @@ Alert on spikes in latency, redirect failures, cache miss anomalies.
 - **Rate Limiting**: Implement caps on API requests and post creations.
 - **Data Archiving**: Move old posts to **Glacier** for cost-effective storage.
 
+---
 ---
 
 # NewsFeed System Design
@@ -498,6 +503,7 @@ This design outlines a scalable NewsFeed system capable of handling 50M daily ac
 This NewsFeed system uses a hybrid fanout model with Redis and Memcached caching to balance performance and scalability. It efficiently handles high-follower accounts by merging posts on read, computes rankings in batch for efficiency, and addresses edge cases with targeted strategies, meeting all specified targets.
 
 ---
+---
 
 # Pastebin System Design
 
@@ -615,6 +621,7 @@ This NewsFeed system uses a hybrid fanout model with Redis and Memcached caching
 Pastebin uses **ZooKeeper** for unique base62 IDs, **DynamoDB** for metadata, **S3** for large pastes, **Redis/CDN** for caching, and **TTL** for expiration. It handles 10M DAU, 1K creations/sec, 100K read QPS with <50ms retrieval, <200ms creation, and robust edge case handling (duplicates, malicious content, large pastes). Security, analytics, and syntax highlighting ensure a FAANG-ready design.
 
 
+---
 ---
 
 
@@ -754,6 +761,7 @@ Pastebin uses **ZooKeeper** for unique base62 IDs, **DynamoDB** for metadata, **
 ## Summary
 Instagram’s design uses a **hybrid push-pull model** with **Cassandra** for posts, **S3** for media, **Redis** for timelines, and **CDN** for delivery. It optimizes celebrities with pull-based feeds, ensures chronological sorting, and handles edge cases (privacy, viral content). Scales to 100M DAU, 1B posts/day, 50K QPS with <200ms feed latency, 99.99% uptime, and robust security/analytics.
 
+---
 ---
 
 
@@ -920,6 +928,7 @@ Instagram’s design uses a **hybrid push-pull model** with **Cassandra** for po
 Dropbox uses **S3** for files, **PostgreSQL** for metadata, **presigned URLs** for uploads, **CDN** for downloads, and **WebSockets/Kafka** for syncing. It supports large files (chunking), deduplication, versioning, and secure sharing. Scales to 10M DAU, 1PB storage, 1K uploads/sec with <500ms sync, <1s uploads, and robust edge case handling (conflicts, corruption, quotas).
 
 ---
+---
 
 
 # YouTube/Netflix System Design
@@ -1085,6 +1094,7 @@ Dropbox uses **S3** for files, **PostgreSQL** for metadata, **presigned URLs** f
 YouTube/Netflix uses **S3** for videos, **DynamoDB/Cassandra** for metadata, **CDN** for streaming, and **Redis** for recommendations. It supports resumable uploads, adaptive bitrate streaming (HLS/DASH), and personalized recs via **Spark**. Scales to 1B DAU, 10PB storage, 100K QPS with <200ms video start, <500ms recs, and robust edge case handling (buffering, geo-restrictions, corruption).
 
 
+---
 ---
 
 
@@ -1271,7 +1281,7 @@ YouTube/Netflix uses **S3** for videos, **DynamoDB/Cassandra** for metadata, **C
 Yelp/Nearby Friends uses **Redis Geo** for fast location queries, **Elasticsearch** for text/geo searches, and **PostgreSQL** for durable reviews/ratings. It supports complex queries with **quadtree indexing**, predefined locations via **GeoJSON**, and enforces one-review-per-business. Scales to 10M DAU, 100K QPS with <100ms geo-queries, <200ms searches, and robust edge case handling (spoofing, privacy). APIs and protocols optimize for write-heavy review ingestion.
 
 ---
-
+---
 
 # Rate Limiter System Design
 
@@ -1420,6 +1430,7 @@ Yelp/Nearby Friends uses **Redis Geo** for fast location queries, **Elasticsearc
 Rate Limiter uses **token bucket** with **Redis Cluster** for distributed, atomic rate checks, allowing bursts and negative tokens. Rules are managed in **PostgreSQL**, cached in Redis. Scales to 100K QPS, 1M users with <10ms checks, ~50K checks/sec. Handles edge cases (DDoS, skew) and uses **HTTPS/gRPC** for secure, fast communication. Comprehensive monitoring and analytics ensure FAANG-ready performance.
 
 
+---
 ---
 
 
@@ -1580,6 +1591,7 @@ Rate Limiter uses **token bucket** with **Redis Cluster** for distributed, atomi
 Log Collection system uses **Kafka** for high-throughput ingestion, **ELK Stack** for parsing/storage/visualization, and **Spark** for analytics. It scales to 1M logs/sec, 1PB storage, 10K QPS with <100ms ingestion, <500ms queries. Handles edge cases (spikes, malformed logs) with buffering, validation, and TTLs. **HTTPS/gRPC** ensure secure, fast communication, making it FAANG-ready.
 
 ---
+---
 
 
 ### 12. Voting System
@@ -1612,6 +1624,10 @@ Log Collection system uses **Kafka** for high-throughput ingestion, **ELK Stack*
 - **Scalability Estimates**: Handles ~100K mentions/sec, ~1M topics, and ~10K QPS for rankings with Redis scaling.
 - **Latency/Throughput Targets**: Target <50ms for mention updates, <200ms for rankings, and ~10K trends/sec processing.
 
+
+---
+---
+
 ### 14. Facebook Messenger
 **Improvements:**
 - **Message Ingestion**: Use Kafka for high-throughput message queues, partitioned by chat_id.
@@ -1626,6 +1642,9 @@ Log Collection system uses **Kafka** for high-throughput ingestion, **ELK Stack*
 - **Why Kafka + Cassandra?**: Kafka ensures reliable ingestion, and Cassandra scales for message storage.
 - **Scalability Estimates**: Supports ~100M daily active users, ~1B messages/day, and ~50K QPS for delivery with Kafka and Cassandra scaling.
 - **Latency/Throughput Targets**: Target <100ms for message delivery, <200ms for notifications, and ~10K messages/sec ingestion.
+
+---
+---
 
 ### 15. Local Delivery (Gopuff)
 **Improvements:**
@@ -1645,6 +1664,10 @@ Log Collection system uses **Kafka** for high-throughput ingestion, **ELK Stack*
 - **Scalability Estimates**: Supports ~10K orders/sec, ~1M daily orders, and ~100K QPS for inventory checks with Kafka and Redis scaling.
 - **Latency/Throughput Targets**: Target <100ms for inventory checks, <500ms for routing, and ~5K orders/sec processing.
 
+---
+---
+
+
 ### 16. Strava
 **Improvements:**
 - **Activity Ingestion**: Use Kafka to process GPS and fitness data streams, partitioned by user_id.
@@ -1662,6 +1685,10 @@ Log Collection system uses **Kafka** for high-throughput ingestion, **ELK Stack*
 - **Why Kafka + Cassandra?**: Kafka ensures reliable data ingestion, and Cassandra scales for activity storage.
 - **Scalability Estimates**: Supports ~1M daily active users, ~10M activities/day, and ~10K QPS for analytics with Kafka and Cassandra scaling.
 - **Latency/Throughput Targets**: Target <200ms for activity ingestion, <500ms for analytics, and ~5K activities/sec processing.
+
+---
+---
+
 
 ### 17. FB Live Comments
 **Improvements:**
@@ -1686,6 +1713,10 @@ To allocate viewers of the same live video to the same server, we can use two st
 ## Strong Consistency Systems
 These prioritize transactional integrity and failure handling.
 
+---
+---
+
+
 ### 18. Online Ticket Booking System
 **Improvements:**
 - **Concurrency**: To improve the booking experience by reserving tickets, we can implement a distributed lock mechanism with a Time-To-Live (TTL). When a user selects a ticket, the Booking Service attempts to acquire a lock on that ticket in a distributed lock system (like Redis) with a 10-minute TTL. Simultaneously, a booking record is created in the database with an "in-progress" status, and the user is redirected to the payment page with a bookingId. If the user completes payment within the TTL, a webhook from the payment processor triggers a database transaction, updating both the ticket status to "sold" and the booking status to "confirmed." If the user abandons the process or the TTL expires, the lock is automatically released, making the ticket available again. This approach prevents overselling and provides a better user experience by temporarily reserving tickets during checkout.
@@ -1702,6 +1733,10 @@ These prioritize transactional integrity and failure handling.
 - **Scalability Estimates**: Supports ~10K bookings/sec, ~1M daily tickets, and ~50K QPS for reservations with Redis and PostgreSQL scaling.
 - **Latency/Throughput Targets**: Target <200ms for seat reservation, <500ms for booking, and ~5K bookings/sec processing.
 
+---
+---
+
+
 ### 19. E-Commerce Website (Amazon)
 **Improvements:**
 - **Catalog**: Store products in a NoSQL DB (DynamoDB) for flexible schemas. Index in Elasticsearch for fast search.
@@ -1717,6 +1752,9 @@ These prioritize transactional integrity and failure handling.
 - **Why Microservices + DynamoDB?**: Microservices scale independently, and DynamoDB handles high read/write loads.
 - **Scalability Estimates**: Supports ~100M daily active users, ~1M orders/sec, and ~100K QPS for searches with DynamoDB and Elasticsearch scaling.
 - **Latency/Throughput Targets**: Target <100ms for searches, <500ms for checkout, and ~10K orders/sec processing.
+
+---
+---
 
 ### 20. Online Messaging App (WhatsApp/Slack)
 **Improvements:**
@@ -1737,6 +1775,9 @@ These prioritize transactional integrity and failure handling.
 - **Scalability Estimates**: Supports ~100M daily active users, ~1B messages/day, and ~50K QPS for delivery with Kafka and Cassandra scaling.
 - **Latency/Throughput Targets**: Target <100ms for message delivery, <200ms for notifications, and ~10K messages/sec ingestion.
 
+---
+---
+
 ### 21. Task Management Tool
 **Improvements:**
 - **CRUD APIs**: Use REST APIs with a relational DB (PostgreSQL) for tasks {task_id, user_id, status, due_date}.
@@ -1752,6 +1793,9 @@ These prioritize transactional integrity and failure handling.
 - **Why PostgreSQL + Celery?**: PostgreSQL handles relational data well, and Celery ensures reliable background jobs.
 - **Scalability Estimates**: Supports ~1M daily active users, ~10M tasks/day, and ~10K QPS for API calls with PostgreSQL and Celery scaling.
 - **Latency/Throughput Targets**: Target <100ms for task CRUD, <500ms for reminders, and ~5K tasks/sec processing.
+
+---
+---
 
 ### 22. Tinder
 **Improvements:**
@@ -1773,6 +1817,9 @@ These prioritize transactional integrity and failure handling.
 - **Scalability Estimates**: Supports ~10M daily active users, ~100M swipes/day, and ~50K QPS for matching with Redis and DynamoDB scaling.
 - **Latency/Throughput Targets**: Target <50ms for swipe matching, <200ms for profile retrieval, and ~10K swipes/sec processing.
 
+---
+---
+
 ### 23. Online Auction
 **Improvements:**
 - **Bidding**: Use Redis for real-time bid counters and PostgreSQL for durable bid history {auction_id, user_id, bid_amount, timestamp}.
@@ -1788,6 +1835,9 @@ These prioritize transactional integrity and failure handling.
 - **Scalability Estimates**: Supports ~10K bids/sec, ~1M daily auctions, and ~50K QPS for bid updates with Redis and PostgreSQL scaling.
 - **Latency/Throughput Targets**: Target <100ms for bid submission, <200ms for notifications, and ~5K bids/sec processing.
 
+---
+---
+
 ### 24. Robinhood
 **Improvements:**
 - **Trades**: Store trade orders in PostgreSQL {order_id, user_id, stock, amount, timestamp} with strong consistency.
@@ -1802,6 +1852,9 @@ These prioritize transactional integrity and failure handling.
 - **Why Optimistic + PostgreSQL?**: Optimistic locking scales for trades, and PostgreSQL ensures transactional integrity.
 - **Scalability Estimates**: Supports ~1M daily active users, ~10M trades/day, and ~50K QPS for price feeds with Kafka and PostgreSQL scaling.
 - **Latency/Throughput Targets**: Target <100ms for trade submission, <50ms for price feeds, and ~5K trades/sec processing.
+
+---
+---
 
 ### 25. Google Docs
 **Improvements:**
@@ -1825,6 +1878,9 @@ These prioritize transactional integrity and failure handling.
 ## Scheduler Services
 These focus on timing, reliability, and eventual execution.
 
+---
+---
+
 ### 26. Web Crawler
 **Improvements:**
 - **Crawling Strategy**: Use BFS for broad coverage, with politeness rules (robots.txt, rate-limiting per domain).
@@ -1845,6 +1901,9 @@ These focus on timing, reliability, and eventual execution.
 - **Scalability Estimates**: Supports ~1M URLs/hour, ~10K domains, and ~10K QPS for queue processing with Kafka and Redis scaling.
 - **Latency/Throughput Targets**: Target <500ms for URL processing, <1s for page crawls, and ~5K URLs/sec processing.
 
+---
+---
+
 ### 27. Task Scheduler
 **Improvements:**
 - **Job Queues**: Use RabbitMQ for task distribution and Redis for scheduling (sorted sets with timestamps).
@@ -1860,6 +1919,9 @@ These focus on timing, reliability, and eventual execution.
 - **Scalability Estimates**: Supports ~10K tasks/sec, ~1M daily tasks, and ~10K QPS for scheduling with RabbitMQ and Redis scaling.
 - **Latency/Throughput Targets**: Target <50ms for task scheduling, <500ms for execution, and ~5K tasks/sec processing.
 
+---
+---
+
 ### 28. Real-Time Notification System
 **Improvements:**
 - **Delivery**: Use WebSockets for real-time push and APNs/GCM for mobile notifications.
@@ -1874,6 +1936,9 @@ These focus on timing, reliability, and eventual execution.
 - **Why WebSockets + DynamoDB?**: WebSockets ensure real-time delivery, and DynamoDB scales for token storage.
 - **Scalability Estimates**: Supports ~100M daily active users, ~1B notifications/day, and ~50K QPS for delivery with WebSocket and DynamoDB scaling.
 - **Latency/Throughput Targets**: Target <100ms for notification delivery, <200ms for webhook retries, and ~10K notifications/sec processing.
+
+---
+---
 
 ### 29. LeetCode
 **Improvements:**
@@ -1894,6 +1959,9 @@ These focus on timing, reliability, and eventual execution.
 - **Why RabbitMQ + Docker?**: RabbitMQ ensures reliable queuing, and Docker provides scalable judging.
 - **Scalability Estimates**: Supports ~10K submissions/sec, ~1M daily submissions, and ~10K QPS for judging with RabbitMQ and Docker scaling.
 - **Latency/Throughput Targets**: Target <1s for submission judging, <500ms for queuing, and ~5K submissions/sec processing.
+
+---
+---
 
 ### 30. Ad Click Aggregator
 **Improvements:**
@@ -1916,6 +1984,9 @@ These focus on timing, reliability, and eventual execution.
 ## Trie / Proximity Systems
 These focus on efficient data structures and low-latency retrieval.
 
+---
+---
+
 ### 31. Search Autocomplete System
 **Improvements:**
 - **Data Structure**: Use a trie backed by Redis for prefix lookups, with frequency scores for ranking.
@@ -1931,6 +2002,9 @@ These focus on efficient data structures and low-latency retrieval.
 - **Why Trie + Redis?**: Trie ensures fast prefix lookups, and Redis scales for caching and ranking.
 - **Scalability Estimates**: Supports ~100K QPS for queries, ~1M daily active users, and ~10M suggestions/day with Redis scaling.
 - **Latency/Throughput Targets**: Target <50ms for suggestions, <100ms for caching, and ~50K queries/sec processing.
+
+---
+---
 
 ### 32. Ride-Sharing App (Uber/Lyft)
 **Improvements:**
@@ -1953,6 +2027,9 @@ These focus on efficient data structures and low-latency retrieval.
 - **Scalability Estimates**: Supports ~10M daily active users, ~1M rides/day, and ~50K QPS for matching with Redis and Kafka scaling.
 - **Latency/Throughput Targets**: Target <100ms for driver matching, <500ms for ETA, and ~10K matches/sec processing.
 
+---
+---
+
 ### 33. Typeahead Suggestion
 **Improvements:**
 - **Data Structure**: Use a trie in Redis for prefix lookups, with frequency scores for ranking.
@@ -1967,6 +2044,9 @@ These focus on efficient data structures and low-latency retrieval.
 - **Why Trie + Redis?**: Trie ensures fast prefix lookups, and Redis scales for caching.
 - **Scalability Estimates**: Supports ~100K QPS for queries, ~1M daily active users, and ~10M suggestions/day with Redis scaling.
 - **Latency/Throughput Targets**: Target <50ms for suggestions, <100ms for caching, and ~50K queries/sec processing.
+
+---
+---
 
 ### 34. Twitter Search
 **Improvements:**
@@ -1983,6 +2063,9 @@ These focus on efficient data structures and low-latency retrieval.
 - **Scalability Estimates**: Supports ~100M daily active users, ~1B tweets/day, and ~100K QPS for searches with Elasticsearch and Redis scaling.
 - **Latency/Throughput Targets**: Target <100ms for search results, <200ms for caching, and ~50K searches/sec processing.
 
+---
+---
+
 ### 35. FB Post Search
 **Improvements:**
 - **Search Index**: Use Elasticsearch to index posts {post_id, content, user_id, timestamp} with privacy filters.
@@ -1998,6 +2081,8 @@ These focus on efficient data structures and low-latency retrieval.
 - **Scalability Estimates**: Supports ~100M daily active users, ~1B posts/day, and ~100K QPS for searches with Elasticsearch and Redis scaling.
 - **Latency/Throughput Targets**: Target <100ms for search results, <200ms for caching, and ~50K searches/sec processing.
 
+---
+---
 
 ### 35. FB Post Search (we're not allowed to use a search engine like Elasticsearch or a pre-built full-text index (like Postgres Full-Text)):
 - To enable users to **search posts** by keyword efficiently, we'll create an inverted index. This index will map keywords to the IDs of the posts that contain them. When a new post is ingested, the Ingestion Service will tokenize its content into individual keywords and then append the post's ID to the list associated with each of these keywords in our inverted index. For fast lookups, we'll store this inverted index in Redis, leveraging its in-memory capabilities. When a user searches for a keyword, we can directly retrieve the list of matching post IDs from Redis and return the corresponding posts. This approach provides significantly faster search compared to querying an unindexed database.
@@ -2011,6 +2096,9 @@ These focus on efficient data structures and low-latency retrieval.
 
 ## Aggregation Systems
 These focus on processing and ranking high-cardinality data.
+
+---
+---
 
 ### 36. Top K Problems (YouTube Views, Searched Keywords, Spotify Songs)
 **Improvements:**
