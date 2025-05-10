@@ -1594,164 +1594,1368 @@ Log Collection system uses **Kafka** for high-throughput ingestion, **ELK Stack*
 ---
 
 
-### 12. Voting System
-**Improvements:**
-- **Idempotency**: Use a unique vote_id (user_id + poll_id) to prevent duplicate votes. Store in Redis for fast checks.
-- **Fraud Prevention**: Add rate-limiting and CAPTCHA for suspicious activity. Log votes in a relational DB (PostgreSQL) for auditing.
-- **Aggregation**: Use Redis for real-time vote counts (increment counters) and batch jobs (Spark) for final tallies.
-- **Edge Cases**: Handle vote reversals (store vote history), network failures (retry logic), result disputes (audit trails), voter impersonation (auth checks), and high vote spikes (scale Redis).
-- **Monitoring**: Track vote throughput, fraud detection rate, count accuracy, and vote processing latency.
-- **Trade-offs:**
-  - **Real-time vs. Eventual Counts**: Real-time is user-friendly but risks inconsistency; eventual is consistent but delayed. Choose real-time with periodic reconciliation for UX.
-  - **Redis vs. DB**: Redis is fast for counters but volatile; DB is durable but slower. Use Redis with DB backup for speed and reliability.
-  - **Rate-Limiting vs. CAPTCHA**: Rate-limiting is lightweight but coarse; CAPTCHA is robust but intrusive. Use both for layered security.
-- **Why Redis + PostgreSQL?**: Redis ensures low-latency vote counting, and PostgreSQL provides durable storage.
-- **Scalability Estimates**: Supports ~10K votes/sec, ~1M voters, and ~100K QPS for counts with Redis and PostgreSQL scaling.
-- **Latency/Throughput Targets**: Target <50ms for vote submission, <100ms for counts, and ~5K votes/sec processing.
+# Voting System Design
 
-### 13. Trending Topics System
-**Improvements:**
-- **Counting**: Use count-min sketch for approximate counting of topic mentions to save memory. Store in Redis for fast updates.
-- **Sliding Window**: Implement a time-based sliding window (e.g., 1 hour) using Redis sorted sets to track recent mentions.
-- **Ranking**: Compute trending scores (mentions + recency) via a background job and cache results in Redis.
-- **Edge Cases**: Handle sudden spikes (use exponential decay in scoring), stale trends (expire old data), low-memory scenarios (evict cold topics), topic ambiguity (normalize terms), and skewed data (cap outliers).
-- **Monitoring**: Track sketch accuracy, ranking latency, cache hit ratio, and trend refresh rate.
-- **Trade-offs:**
-  - **Count-Min vs. Exact Counting**: Count-min is memory-efficient but approximate; exact counting is accurate but memory-heavy. Choose count-min for scalability.
-  - **Sliding vs. Fixed Window**: Sliding window is precise but complex; fixed window is simpler but less granular. Choose sliding for real-time trends.
-  - **Redis vs. In-Memory**: Redis is durable and scalable; in-memory is faster but volatile. Use Redis for reliability.
-- **Why Count-Min + Redis?**: Count-min scales for high cardinality, and Redis ensures low-latency updates.
-- **Scalability Estimates**: Handles ~100K mentions/sec, ~1M topics, and ~10K QPS for rankings with Redis scaling.
-- **Latency/Throughput Targets**: Target <50ms for mention updates, <200ms for rankings, and ~10K trends/sec processing.
+## Functional Requirements
+- **Vote Submission**: Users submit votes for polls with one vote per user per poll.
+- **Vote Counting**: Display real-time vote counts for each poll option.
+- **Fraud Prevention**: Prevent duplicate votes and detect suspicious activity.
+- **Vote Auditing**: Maintain auditable records of all votes.
+- **Result Reporting**: Provide final tallies and vote history.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~10K votes/sec, ~1M voters, ~100K QPS for counts.
+- **Latency**: <50ms for vote submission, <100ms for counts, ~5K votes/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Strong for vote submissions to prevent duplicates, eventual for counts.
+- **Security**: Prevent fraud, impersonation, and unauthorized access.
+
+## Write-Heavy Considerations
+- **High Throughput**: Process ~10K votes/sec during peak events.
+- **Durability**: Ensure votes are persisted reliably for auditing.
+- **Ingestion Speed**: Fast vote submission with immediate feedback.
+
+## Improvements
+- **Idempotency**: 
+  - Use **vote_id** (`user_id + poll_id`) for uniqueness checks in **Redis** (`vote:user_id:poll_id`).
+  - Store votes in **PostgreSQL** for durability.
+- **Fraud Prevention**: 
+  - **Rate-limiting**: Cap vote attempts per user/IP (Redis-based).
+  - **CAPTCHA**: Trigger for suspicious patterns (e.g., rapid votes).
+  - Log all votes in PostgreSQL for auditing.
+- **Aggregation**: 
+  - **Redis**: Real-time vote counts (`counter:poll_id:option_id`, increment).
+  - **Spark**: Batch jobs for final tallies, reconciling inconsistencies.
+- **Edge Cases**: 
+  - **Vote Reversals**: Store vote history in PostgreSQL, allow updates with audit trail.
+  - **Network Failures**: Implement retry logic with exponential backoff.
+  - **Result Disputes**: Maintain detailed audit logs in PostgreSQL.
+  - **Voter Impersonation**: Enforce **JWT-based auth** for vote submissions.
+  - **High Vote Spikes**: Scale Redis Cluster, buffer votes in **Kafka** if needed.
+- **Monitoring**: Track vote throughput, fraud detection rate, count accuracy, vote processing latency, Redis hit rate, PostgreSQL write latency.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure vote submission and count retrieval.
+  - **gRPC**: Fast internal communication for vote processing.
+  - **TCP**: Reliable Redis/PostgreSQL connections.
+- **APIs**:
+  - `POST /vote`: Submit vote for a poll option.
+    ```json
+    {
+      "user_id": "uuid",
+      "poll_id": "uuid",
+      "option_id": "uuid",
+      "timestamp": 1697056800000
+    }
+    ```
+  - `GET /poll/:poll_id/counts`: Retrieve real-time vote counts.
+    ```json
+    {
+      "poll_id": "uuid",
+      "counts": {"option_id1": 500, "option_id2": 300}
+    }
+    ```
+
+## Trade-offs
+- **Real-time vs. Eventual Counts**: 
+  - **Real-time**: User-friendly, risks inconsistency. 
+  - **Eventual**: Consistent, delayed. 
+  - *Choice*: **Real-time** with periodic Spark reconciliation.
+- **Redis vs. DB**: 
+  - **Redis**: Fast counters, volatile. 
+  - **DB**: Durable, slower. 
+  - *Choice*: **Redis** with PostgreSQL backup.
+- **Rate-Limiting vs. CAPTCHA**: 
+  - **Rate-Limiting**: Lightweight, coarse. 
+  - **CAPTCHA**: Robust, intrusive. 
+  - *Choice*: Both for layered security.
+
+## Why Redis + PostgreSQL?
+- **Redis**: Low-latency vote counting and idempotency checks.
+- **PostgreSQL**: Durable storage for votes and audit trails.
+
+## Scalability Estimates
+- **Votes**: ~10K votes/sec via Redis Cluster, Kafka buffering.
+- **Voters**: ~1M with sharded Redis/PostgreSQL.
+- **Counts**: ~100K QPS for count queries.
+
+## Latency/Throughput Targets
+- **Vote Submission**: <50ms (Redis/PostgreSQL).
+- **Counts**: <100ms (Redis).
+- **Processing**: ~5K votes/sec.
+
+## Database Schemas
+- **PostgreSQL Votes Table**:
+  ```sql
+  CREATE TABLE votes (
+    vote_id TEXT PRIMARY KEY, -- user_id + poll_id
+    user_id UUID,
+    poll_id UUID,
+    option_id UUID,
+    timestamp TIMESTAMP,
+    UNIQUE (user_id, poll_id)
+  );
+  ```
+  - **Consistency**: Strong for vote writes (unique constraint).
+  - **Availability**: Multi-AZ replication.
+- **PostgreSQL VoteHistory Table**:
+  ```sql
+  CREATE TABLE vote_history (
+    history_id UUID PRIMARY KEY,
+    vote_id TEXT,
+    user_id UUID,
+    poll_id UUID,
+    option_id UUID,
+    action TEXT, -- 'submit', 'reverse'
+    timestamp TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for audit trails.
+
+## Cache Schemas
+- **Redis**:
+  - `vote:user_id:poll_id`: Flag for idempotency (exists or not).
+  - `counter:poll_id:option_id`: Vote count (integer).
+  - **Consistency**: Strong for idempotency (Lua scripts), eventual for counts.
+  - **TTL**: 24hr for vote flags, none for counters (reconciled by Spark).
+- **Tricks**: Redis pipelining for batch vote checks, LRU for memory management.
+
+## Consistency vs. Availability
+- **PostgreSQL**: 
+  - **Strong Consistency**: For vote submissions, history (ACID).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Strong Consistency**: For idempotency checks (Lua scripts).
+  - **Eventual Consistency**: For vote counts.
+  - **High Availability**: Redis Cluster.
+- **Tricks**: PostgreSQL advisory locks for vote writes, Redis atomic operations for counters.
+
+## Additional Considerations
+- **Security**: 
+  - **JWT auth** for vote submissions.
+  - Block suspicious IPs via **WAF**.
+- **Analytics**: Log votes in **Kafka**, aggregate in **Redshift** for fraud analysis.
+- **Notifications**: Alert on fraud detection via **SNS**.
+- **Rate Limiting**: Use Redis-based token bucket for vote attempts.
+- **Backup**: PostgreSQL snapshots to **S3/Glacier** for audit logs.
+
+## Correctness Check
+- **Original Design**: All components (Redis, PostgreSQL, Spark) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and detailed schemas for completeness.
+
+## Summary
+Voting system uses **token bucket rate-limiting** with **Redis** for fast idempotency checks and real-time counts, backed by **PostgreSQL** for durable votes and audits. It scales to 10K votes/sec, 1M voters, 100K QPS with <50ms submissions, <100ms counts. Handles fraud (CAPTCHA, rate-limiting), reversals, and spikes with **Kafka** buffering and **Spark** reconciliation. **HTTPS/gRPC** ensure secure, fast communication, making it FAANG-ready.
+
+---
+---
+
+# Trending Topics System Design
+
+## Functional Requirements
+- **Topic Counting**: Track mentions of topics (e.g., hashtags, keywords) across platforms.
+- **Trending Rankings**: Rank topics by mentions and recency in a sliding window.
+- **Query Trends**: Retrieve top trending topics with low latency.
+- **Topic Normalization**: Handle variations (e.g., #AI vs. #ArtificialIntelligence).
+- **Analytics**: Provide insights into topic trends over time.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~100K mentions/sec, ~1M topics, ~10K QPS for rankings.
+- **Latency**: <50ms for mention updates, <200ms for rankings, ~10K trends/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for counts/rankings, strong for configuration data.
+- **Security**: Prevent manipulation of trends (e.g., bot-driven spikes).
+
+## Write-Heavy Considerations
+- **High Throughput**: Process ~100K mentions/sec during peak events.
+- **Durability**: Persist counts for auditing and historical analysis.
+- **Ingestion Speed**: Fast mention updates with minimal latency.
+
+## Improvements
+- **Counting**: 
+  - Use **count-min sketch** in **Redis** for memory-efficient, approximate counting of topic mentions (`sketch:topic`).
+  - Store exact counts for top topics in Redis for accuracy.
+- **Sliding Window**: 
+  - Implement 1-hour sliding window using **Redis sorted sets** (`mentions:topic`, score: timestamp).
+  - Expire old mentions via Redis TTL or cleanup job.
+- **Ranking**: 
+  - Compute trending scores (mentions + recency with **exponential decay**) via **Spark** background job.
+  - Cache rankings in Redis (`trends:window`, sorted set) for fast retrieval.
+- **Edge Cases**: 
+  - **Sudden Spikes**: Apply exponential decay to dampen bot-driven surges.
+  - **Stale Trends**: Expire old data via TTL or periodic cleanup.
+  - **Low-Memory**: Evict cold topics from Redis using LRU.
+  - **Topic Ambiguity**: Normalize terms (e.g., lowercase, synonym mapping) before counting.
+  - **Skewed Data**: Cap outlier mention counts to prevent manipulation.
+- **Monitoring**: Track sketch accuracy, ranking latency, cache hit ratio, trend refresh rate, Redis memory usage, Spark job duration.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for mention ingestion and trend queries.
+  - **gRPC**: High-performance internal communication for count updates.
+  - **TCP**: Reliable Redis connections.
+- **APIs**:
+  - `POST /mentions`: Record topic mention.
+    ```json
+    {
+      "topic": "#AI",
+      "timestamp": 1697056800000,
+      "source": "tweet"
+    }
+    ```
+  - `GET /trends`: Retrieve top trending topics.
+    ```json
+    {
+      "window": "1h",
+      "limit": 10,
+      "trends": [{"topic": "#AI", "score": 1500}, ...]
+    }
+    ```
+
+## Trade-offs
+- **Count-Min vs. Exact Counting**: 
+  - **Count-Min**: Memory-efficient, approximate. 
+  - **Exact**: Accurate, memory-heavy. 
+  - *Choice*: **Count-Min** for scalability.
+- **Sliding vs. Fixed Window**: 
+  - **Sliding**: Precise, complex. 
+  - **Fixed**: Simpler, less granular. 
+  - *Choice*: **Sliding** for real-time trends.
+- **Redis vs. In-Memory**: 
+  - **Redis**: Durable, scalable. 
+  - **In-Memory**: Faster, volatile. 
+  - *Choice*: **Redis** for reliability.
+
+## Why Count-Min + Redis?
+- **Count-Min**: Scales for high-cardinality topics with low memory.
+- **Redis**: Low-latency updates and ranking retrieval.
+
+## Scalability Estimates
+- **Mentions**: ~100K mentions/sec via Redis sharding.
+- **Topics**: ~1M with count-min sketch compression.
+- **Rankings**: ~10K QPS for trend queries.
+
+## Latency/Throughput Targets
+- **Mention Updates**: <50ms (Redis).
+- **Rankings**: <200ms (Redis/Spark).
+- **Processing**: ~10K trends/sec.
+
+## Database Schemas
+- **PostgreSQL Config Table** (for topic normalization rules):
+  ```sql
+  CREATE TABLE topic_config (
+    config_id UUID PRIMARY KEY,
+    topic TEXT,
+    normalized_topic TEXT,
+    created_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for configuration (ACID).
+  - **Availability**: Multi-AZ replication.
+
+## Cache Schemas
+- **Redis**:
+  - `sketch:topic`: Count-min sketch for mention counts.
+  - `mentions:topic`: Sorted set {`mention_id`, `timestamp`}.
+  - `trends:window`: Sorted set {`topic`, `score`}.
+  - **Consistency**: Eventual for counts/rankings, sync with Spark.
+  - **TTL**: 1hr for mentions, 10min for trends.
+- **Tricks**: Redis pipelining for batch updates, LRU for cold topics.
+
+## Consistency vs. Availability
+- **PostgreSQL**: 
+  - **Strong Consistency**: For topic normalization rules (transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Eventual Consistency**: For sketches, rankings.
+  - **High Availability**: Redis Cluster with replicas.
+- **Tricks**: Redis atomic operations for count updates, PostgreSQL advisory locks for config updates.
+
+## Additional Considerations
+- **Security**: 
+  - Validate mentions via **WAF** to block bot spam.
+  - Use **JWT auth** for API access.
+- **Analytics**: Log mentions in **Kafka**, aggregate in **Redshift** for trend analysis.
+- **Notifications**: Alert on anomalous spikes via **SNS**.
+- **Rate Limiting**: Cap mention submissions per source (Redis token bucket).
+- **Backup**: Archive historical trends to **S3/Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (count-min sketch, Redis, Spark) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and schemas for completeness.
+
+## Summary
+Trending Topics system uses **count-min sketch** in **Redis** for memory-efficient counting, **sliding window** for real-time tracking, and **Spark** for ranking. It scales to 100K mentions/sec, 1M topics, 10K QPS with <50ms updates, <200ms rankings. Handles spikes, ambiguity, and low-memory scenarios with **Kafka** for analytics and **HTTPS/gRPC** for secure, fast communication. FAANG-ready with robust monitoring and security.
 
 
 ---
 ---
 
-### 14. Facebook Messenger
-**Improvements:**
-- **Message Ingestion**: Use Kafka for high-throughput message queues, partitioned by chat_id.
-- **Storage**: Store messages in Cassandra {chat_id, message_id, content, timestamp} for scalability.
-- **Delivery**: Use WebSockets for real-time delivery and APNs/GCM for push notifications.
-- **Edge Cases**: Handle offline users (store messages), duplicates (idempotency keys), group chats (fanout logic), message expiration (TTL policies), and delivery failures (retry logic).
-- **Monitoring**: Track message delivery latency, notification success rate, queue backlog, and message processing success rate.
-- **Trade-offs:**
-  - **Kafka vs. RabbitMQ**: Kafka is durable and scalable; RabbitMQ is simpler but less robust. Choose Kafka for high throughput.
-  - **WebSockets vs. Polling**: WebSockets are real-time but complex; polling is simpler but delayed. Choose WebSockets for UX.
-  - **Cassandra vs. DynamoDB**: Cassandra is cost-effective for writes; DynamoDB is simpler but costlier. Choose Cassandra for scalability.
-- **Why Kafka + Cassandra?**: Kafka ensures reliable ingestion, and Cassandra scales for message storage.
-- **Scalability Estimates**: Supports ~100M daily active users, ~1B messages/day, and ~50K QPS for delivery with Kafka and Cassandra scaling.
-- **Latency/Throughput Targets**: Target <100ms for message delivery, <200ms for notifications, and ~10K messages/sec ingestion.
+# Facebook Messenger System Design
+
+## Functional Requirements
+- **Message Sending**: Send text, images, videos, and files in 1:1 or group chats.
+- **Message Delivery**: Deliver messages in real-time to online users and store for offline users.
+- **Notifications**: Push notifications for new messages.
+- **Read Receipts**: Track message read status.
+- **Chat Management**: Create/manage group chats, mute, or leave conversations.
+- **Search**: Search message history by keywords or sender.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~100M daily active users (DAU), ~1B messages/day, ~50K QPS for delivery.
+- **Latency**: <100ms for message delivery, <200ms for notifications, ~10K messages/sec ingestion.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for message delivery, strong for chat metadata (e.g., group membership).
+- **Security**: Encrypt messages in transit/storage, ensure user authentication.
+
+## Write-Heavy Considerations
+- **High Throughput**: Ingest ~1B messages/day (~12K messages/sec peak).
+- **Durability**: Persist messages reliably for history and offline delivery.
+- **Ingestion Speed**: Fast message processing with minimal latency.
+
+## Improvements
+- **Message Ingestion**: 
+  - Use **Kafka** for high-throughput queues, partitioned by `chat_id` for load balancing.
+  - Producers send messages to topics (e.g., `messages:chat_id`).
+- **Storage**: 
+  - Store messages in **Cassandra** {`chat_id`, `message_id`, `content`, `timestamp`, `sender_id`, `is_read`} for scalable writes.
+  - Partition by `chat_id`, cluster by `timestamp` for efficient retrieval.
+- **Delivery**: 
+  - **WebSockets** for real-time delivery to online users.
+  - **APNs/GCM** for push notifications to offline users.
+  - Fanout messages to group chat members via Kafka consumers.
+- **Edge Cases**: 
+  - **Offline Users**: Store messages in Cassandra, deliver on reconnect.
+  - **Duplicates**: Use idempotency keys (`message_id`) in Kafka/Cassandra.
+  - **Group Chats**: Fanout messages to all members, optimize for large groups with batch writes.
+  - **Message Expiration**: Set **TTL policies** in Cassandra (e.g., 30 days for ephemeral messages).
+  - **Delivery Failures**: Implement retry logic with exponential backoff, store failed deliveries in Kafka dead-letter queue.
+- **Monitoring**: Track message delivery latency, notification success rate, Kafka queue backlog, Cassandra write throughput, WebSocket connection stability.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for message sending and chat management.
+  - **WebSocket**: Real-time message delivery and read receipts.
+  - **gRPC**: High-performance internal communication for message processing.
+  - **TCP**: Reliable Kafka/Cassandra connections.
+- **APIs**:
+  - `POST /messages`: Send message to a chat.
+    ```json
+    {
+      "chat_id": "uuid",
+      "message_id": "uuid",
+      "sender_id": "uuid",
+      "content": "Hello!",
+      "timestamp": 1697056800000
+    }
+    ```
+  - `GET /chats/:chat_id/messages`: Retrieve message history.
+    ```json
+    {
+      "chat_id": "uuid",
+      "limit": 50,
+      "cursor": "timestamp",
+      "messages": [{"message_id": "uuid", "content": "Hello!", ...}]
+    }
+    ```
+
+## Trade-offs
+- **Kafka vs. RabbitMQ**: 
+  - **Kafka**: Durable, scalable, high-throughput. 
+  - **RabbitMQ**: Simpler, less robust. 
+  - *Choice*: **Kafka** for message volume.
+- **WebSockets vs. Polling**: 
+  - **WebSockets**: Real-time, complex. 
+  - **Polling**: Simpler, delayed. 
+  - *Choice*: **WebSockets** for UX.
+- **Cassandra vs. DynamoDB**: 
+  - **Cassandra**: Cost-effective, scalable writes. 
+  - **DynamoDB**: Simpler, costlier. 
+  - *Choice*: **Cassandra** for scalability.
+
+## Why Kafka + Cassandra?
+- **Kafka**: Reliable, partitioned message ingestion.
+- **Cassandra**: Scalable, high-throughput message storage.
+
+## Scalability Estimates
+- **Users**: ~100M DAU via Kafka partitioning, Cassandra sharding.
+- **Messages**: ~1B/day (~12K messages/sec) with Kafka/Cassandra.
+- **Delivery**: ~50K QPS for WebSocket/APNs.
+
+## Latency/Throughput Targets
+- **Message Delivery**: <100ms (WebSocket).
+- **Notifications**: <200ms (APNs/GCM).
+- **Ingestion**: ~10K messages/sec.
+
+## Database Schemas
+- **Cassandra Messages Table**:
+  ```sql
+  CREATE TABLE messages (
+    chat_id UUID,
+    message_id UUID,
+    sender_id UUID,
+    content TEXT,
+    timestamp TIMESTAMP,
+    is_read BOOLEAN,
+    PRIMARY KEY (chat_id, timestamp, message_id)
+  ) WITH CLUSTERING ORDER BY (timestamp DESC);
+  ```
+  - **Consistency**: Eventual for messages, quorum writes for durability.
+  - **Availability**: Multi-region replication.
+- **PostgreSQL Chats Table** (for metadata):
+  ```sql
+  CREATE TABLE chats (
+    chat_id UUID PRIMARY KEY,
+    type TEXT, -- '1:1', 'group'
+    members JSONB,
+    created_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for chat metadata (ACID).
+  - **Availability**: Multi-AZ.
+
+## Cache Schemas
+- **Redis**:
+  - `chat:chat_id:messages`: Recent messages (list, TTL: 1hr).
+  - `user:user_id:online`: Online status (flag, TTL: 5min).
+  - **Consistency**: Eventual, sync with Cassandra.
+  - **TTL**: Short for transient data.
+- **Tricks**: Redis pipelining for batch fanout, LRU for memory management.
+
+## Consistency vs. Availability
+- **Cassandra**: 
+  - **Eventual Consistency**: For message storage (quorum reads/writes).
+  - **High Availability**: Multi-region.
+- **PostgreSQL**: 
+  - **Strong Consistency**: For chat metadata (transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Eventual Consistency**: For cached messages, online status.
+  - **High Availability**: Redis Cluster.
+- **Tricks**: Cassandra lightweight transactions for critical updates, Redis Lua scripts for atomic fanout.
+
+## Additional Considerations
+- **Security**: 
+  - Encrypt messages in transit (HTTPS/WebSocket) and at rest (**Cassandra encryption**).
+  - Use **JWT auth** for API/WebSocket access.
+- **Analytics**: Log message events in **Kafka**, aggregate in **Redshift** for usage patterns.
+- **Notifications**: Optimize APNs/GCM with priority flags for urgent messages.
+- **Rate Limiting**: Cap message sends per user (Redis token bucket).
+- **Backup**: Archive old messages to **S3/Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (Kafka, Cassandra, WebSockets, APNs/GCM) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, security, notifications, and detailed schemas for completeness.
+
+## Summary
+Facebook Messenger uses **Kafka** for message ingestion, **Cassandra** for storage, **WebSockets** for real-time delivery, and **APNs/GCM** for notifications. It scales to 100M DAU, 1B messages/day, 50K QPS with <100ms delivery, <200ms notifications. Handles offline users, duplicates, and group chats with robust edge case management. **HTTPS/gRPC/WebSocket** ensure secure, fast communication, making it FAANG-ready.
 
 ---
 ---
 
-### 15. Local Delivery (Gopuff)
-**Improvements:**
-- **Order Ingestion**: Use Kafka to handle order events, partitioned by region.
-- **Inventory**: Store inventory in Redis for real-time updates and PostgreSQL for durability.
-- **Routing**: Use OSRM for delivery route optimization; cache routes in Redis.
-- **Traffic-Aware Availability Lookup:** To meet the 1-hour delivery requirement, the Nearby Service enhances basic distance checks by periodically syncing DC location data into memory. On each request, it first filters DCs within a generous fixed radius (e.g. 60 miles), then sends those to an external Travel Time Service that accounts for traffic, roads, borders, and geography. Only DCs with actual drive times under 1 hour are considered for inventory lookup—ensuring more accurate, real-world availability results.
-- **Placing Orders (Strong Consistency)**: Customers place orders via the Orders Service, which uses a SERIALIZABLE Postgres transaction for atomicity. The transaction checks inventory, records the order, and updates stock in one step to prevent double booking. All inventory and order data is colocated in the same ACID-compliant DB for simplicity and strong consistency. If any item is out of stock, the transaction fails and returns a clear error to the user. This approach favors correctness over partial order success.
-- **Fast & Scalable Availability Lookup**: Estimating from 10M orders/day and accounting for browsing behavior, we may see ~20K availability queries/sec. Hitting the DB directly doesn’t scale, so we optimize by caching. The Nearby Service syncs DC data to memory, and availability results are cached (e.g. in Redis) by item ID + DC ID. Availability Service first checks the cache; on a miss, it queries Postgres, updates the cache, and returns results—reducing DB load and improving latency.
-- **Edge Cases**: Handle out-of-stock items (real-time checks), delivery delays (re-routing), order cancellations (rollback), driver unavailability (reassign orders), and traffic disruptions (recompute routes).
-- **Monitoring**: Track order latency, inventory accuracy, delivery ETA, and order success rate.
-- **Trade-offs:**
-  - **Redis vs. DB for Inventory**: Redis is fast but volatile; DB is durable but slower. Use Redis with DB backup.
-  - **Real-time vs. Batch Routing**: Real-time is accurate but compute-heavy; batch is efficient but stale. Choose real-time for UX.
-  - **Kafka vs. RabbitMQ**: Kafka is scalable for events; RabbitMQ is simpler but less robust. Use Kafka for high throughput.
-- **Why Kafka + Redis?**: Kafka handles high-throughput orders, and Redis ensures fast inventory checks.
-- **Scalability Estimates**: Supports ~10K orders/sec, ~1M daily orders, and ~100K QPS for inventory checks with Kafka and Redis scaling.
-- **Latency/Throughput Targets**: Target <100ms for inventory checks, <500ms for routing, and ~5K orders/sec processing.
+# Local Delivery (Gopuff) System Design
+
+## Functional Requirements
+- **Order Placement**: Customers place orders with items, delivery address, and payment.
+- **Inventory Management**: Track real-time inventory across distribution centers (DCs).
+- **Delivery Routing**: Optimize routes for drivers to meet 1-hour delivery.
+- **Availability Lookup**: Check item availability considering traffic and geography.
+- **Order Tracking**: Provide real-time order status and ETA.
+- **Cancellation/Modification**: Allow order cancellations or changes pre-delivery.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~10K orders/sec, ~1M daily orders, ~100K QPS for inventory checks.
+- **Latency**: <100ms for inventory checks, <500ms for routing, ~5K orders/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Strong for order placement/inventory updates, eventual for ETAs.
+- **Security**: Secure payment processing, protect user data.
+
+## Write-Heavy Considerations
+- **High Throughput**: Process ~10K orders/sec during peak demand.
+- **Durability**: Persist orders and inventory updates reliably.
+- **Ingestion Speed**: Fast order and inventory transactions with atomicity.
+
+## Improvements
+- **Order Ingestion**: 
+  - Use **Kafka** for high-throughput order events, partitioned by `region` for load balancing.
+  - Topics: `orders:region`, `inventory_updates:dc_id`.
+- **Inventory**: 
+  - Store real-time inventory in **Redis** (`inventory:dc_id:item_id`, quantity) for fast updates.
+  - Persist in **PostgreSQL** for durability {`dc_id`, `item_id`, `quantity`, `last_updated`}.
+- **Routing**: 
+  - Use **OSRM** (Open Source Routing Machine) for traffic-aware route optimization.
+  - Cache routes in **Redis** (`route:driver_id:order_id`, TTL: 10min) for reuse.
+- **Traffic-Aware Availability Lookup**: 
+  - **Nearby Service**: Syncs DC locations (`dc_id`, `lat`, `lon`) into memory periodically.
+  - Filter DCs within 60-mile radius, query **Travel Time Service** for real-world drive times (<1hr).
+  - Check inventory only for viable DCs, cache results in Redis (`availability:item_id:dc_id`).
+- **Placing Orders (Strong Consistency)**: 
+  - **Orders Service**: Uses **SERIALIZABLE PostgreSQL transactions** to check inventory, record order, and update stock atomically.
+  - Colocate inventory/orders in PostgreSQL for strong consistency.
+  - Fail transaction on out-of-stock items, return clear error.
+- **Fast & Scalable Availability Lookup**: 
+  - Handle ~20K availability queries/sec by caching in **Redis**.
+  - Cache hit: Return result; miss: Query PostgreSQL, update cache.
+- **Edge Cases**: 
+  - **Out-of-Stock**: Real-time Redis/PostgreSQL checks during order placement.
+  - **Delivery Delays**: Recompute routes via OSRM on traffic disruptions.
+  - **Order Cancellations**: Rollback inventory in PostgreSQL transaction.
+  - **Driver Unavailability**: Reassign orders via Kafka event to available drivers.
+  - **Traffic Disruptions**: Update ETAs using Travel Time Service.
+- **Monitoring**: Track order latency, inventory accuracy, delivery ETA accuracy, order success rate, Redis cache hit ratio, PostgreSQL transaction throughput.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for order placement and tracking.
+  - **gRPC**: Fast internal communication for inventory/routing.
+  - **WebSocket**: Real-time order status updates (ETA, delivery).
+  - **TCP**: Reliable Kafka/PostgreSQL connections.
+- **APIs**:
+  - `POST /orders`: Place order with items and delivery details.
+    ```json
+    {
+      "user_id": "uuid",
+      "items": [{"item_id": "uuid", "quantity": 2}],
+      "address": {"lat": 37.7749, "lon": -122.4194},
+      "payment": {...}
+    }
+    ```
+  - `GET /availability`: Check item availability by location.
+    ```json
+    {
+      "item_id": "uuid",
+      "lat": 37.7749,
+      "lon": -122.4194,
+      "dcs": [{"dc_id": "uuid", "available": true}]
+    }
+    ```
+  - `GET /orders/:order_id/status`: Track order status and ETA.
+
+## Trade-offs
+- **Redis vs. DB for Inventory**: 
+  - **Redis**: Fast, volatile. 
+  - **DB**: Durable, slower. 
+  - *Choice*: **Redis** with PostgreSQL backup.
+- **Real-time vs. Batch Routing**: 
+  - **Real-time**: Accurate, compute-heavy. 
+  - **Batch**: Efficient, stale. 
+  - *Choice*: **Real-time** for UX.
+- **Kafka vs. RabbitMQ**: 
+  - **Kafka**: Scalable, high-throughput. 
+  - **RabbitMQ**: Simpler, less robust. 
+  - *Choice*: **Kafka** for order volume.
+
+## Why Kafka + Redis?
+- **Kafka**: Reliable, partitioned order ingestion.
+- **Redis**: Fast inventory checks and route caching.
+
+## Scalability Estimates
+- **Orders**: ~10K orders/sec via Kafka partitioning.
+- **Daily Orders**: ~1M with PostgreSQL sharding.
+- **Inventory Checks**: ~100K QPS with Redis caching.
+
+## Latency/Throughput Targets
+- **Inventory Checks**: <100ms (Redis).
+- **Routing**: <500ms (OSRM).
+- **Processing**: ~5K orders/sec.
+
+## Database Schemas
+- **PostgreSQL Inventory Table**:
+  ```sql
+  CREATE TABLE inventory (
+    dc_id UUID,
+    item_id UUID,
+    quantity INT,
+    last_updated TIMESTAMP,
+    PRIMARY KEY (dc_id, item_id)
+  );
+  ```
+  - **Consistency**: Strong for updates (SERIALIZABLE transactions).
+  - **Availability**: Multi-AZ replication.
+- **PostgreSQL Orders Table**:
+  ```sql
+  CREATE TABLE orders (
+    order_id UUID PRIMARY KEY,
+    user_id UUID,
+    dc_id UUID,
+    items JSONB,
+    address JSONB,
+    status TEXT,
+    created_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for order placement.
+- **PostgreSQL DCs Table**:
+  ```sql
+  CREATE TABLE dcs (
+    dc_id UUID PRIMARY KEY,
+    lat DOUBLE PRECISION,
+    lon DOUBLE PRECISION,
+    address TEXT
+  );
+  ```
+  - **Consistency**: Strong for DC metadata.
+
+## Cache Schemas
+- **Redis**:
+  - `inventory:dc_id:item_id`: Quantity (integer).
+  - `route:driver_id:order_id`: Route data (JSON, TTL: 10min).
+  - `availability:item_id:dc_id`: Availability status (boolean, TTL: 5min).
+  - **Consistency**: Eventual, sync with PostgreSQL.
+- **Tricks**: Redis pipelining for batch inventory checks, LRU for cache eviction.
+
+## Consistency vs. Availability
+- **PostgreSQL**: 
+  - **Strong Consistency**: For orders/inventory (SERIALIZABLE transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Eventual Consistency**: For inventory/routes/availability.
+  - **High Availability**: Redis Cluster.
+- **Kafka**: 
+  - **Strong Consistency**: For order event durability.
+  - **High Availability**: Multi-broker clusters.
+- **Tricks**: PostgreSQL advisory locks for inventory updates, Redis Lua scripts for atomic checks.
+
+## Additional Considerations
+- **Security**: 
+  - Encrypt payment data with **PCI-compliant gateway**.
+  - Use **JWT auth** for API access.
+- **Analytics**: Log orders in **Kafka**, aggregate in **Redshift** for demand forecasting.
+- **Notifications**: Real-time ETA updates via **WebSocket**, alerts via **SNS**.
+- **Rate Limiting**: Cap order placements per user (Redis token bucket).
+- **Backup**: PostgreSQL snapshots to **S3/Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (Kafka, Redis, PostgreSQL, OSRM) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and detailed schemas for completeness.
+
+## Summary
+Gopuff uses **Kafka** for order ingestion, **Redis** for inventory/routing, **PostgreSQL** for durable storage, and **OSRM** for traffic-aware routing. It ensures 1-hour delivery with **Travel Time Service** and scales to 10K orders/sec, 1M daily orders, 100K QPS with <100ms inventory checks, <500ms routing. Strong consistency for orders, robust edge case handling, and **HTTPS/gRPC/WebSocket** make it FAANG-ready.
+
 
 ---
 ---
 
 
-### 16. Strava
-**Improvements:**
-- **Activity Ingestion**: Use Kafka to process GPS and fitness data streams, partitioned by user_id.
-- **Storage**: Store activities in Cassandra {activity_id, user_id, gps_points, timestamp} for high write throughput.
-- **Analytics**: Use Spark for leaderboards and activity stats; cache results in Redis.
-- **Offline Activity Tracking**: Since we don’t support real-time sharing, we record GPS data locally using on-device sensors and store it in memory, persisting to local storage (e.g. Core Data/Room DB) every ~10s to prevent loss. On activity completion or when online, data is uploaded to the server in bulk (optionally chunked). This reduces network reliance, saves bandwidth, and simplifies client UX—highlighting the importance of treating the client as an active system component.
-- **Supporting Real-time Activity Sharing:** To enable friends to follow along in real-time, we send location updates every 2-5 seconds from the athlete's device to the server. Instead of complex WebSockets/SSE, we use a simpler polling mechanism where friends’ clients request updates at the same interval, with a slight offset. Since updates are predictable and slight delays are acceptable, this avoids over-engineering. To improve the user experience, we implement a smart buffering system, intentionally delaying updates by a few seconds for smoother, continuous movement, mimicking a live-stream experience while compensating for network latency.
-- **Realtime Leaderboard:** Use Redis Sorted Sets for real-time leaderboards, storing user IDs as members and total distances as scores. For country-specific leaderboards, create sets like leaderboard:run:USA. For time range filtering, combine sorted sets for timestamps with hashes for activity data, using ZRANGEBYSCORE to retrieve activity IDs within the range. Aggregate distances by user ID and sort to generate the leaderboard. Cache results in Redis with TTL for efficiency. Ensure data consistency and handle Redis memory limitations by caching frequently accessed leaderboards.
-- **Edge Cases**: Handle GPS errors (filter outliers), large uploads (chunked processing), privacy settings (filter on read), activity duplicates (idempotency keys), and incomplete data (validate inputs).
-- **Monitoring**: Track ingestion latency, analytics accuracy, cache hit ratio, and activity processing success rate.
-- **Trade-offs:**
-  - **Cassandra vs. DynamoDB**: Cassandra is cost-effective for writes; DynamoDB is simpler but costlier. Choose Cassandra for scalability.
-  - **Real-time vs. Batch Analytics**: Real-time is fresh but heavy; batch is efficient but stale. Choose batch with periodic updates.
-  - **Kafka vs. RabbitMQ**: Kafka is durable for streams; RabbitMQ is simpler but less robust. Use Kafka for high throughput.
-- **Why Kafka + Cassandra?**: Kafka ensures reliable data ingestion, and Cassandra scales for activity storage.
-- **Scalability Estimates**: Supports ~1M daily active users, ~10M activities/day, and ~10K QPS for analytics with Kafka and Cassandra scaling.
-- **Latency/Throughput Targets**: Target <200ms for activity ingestion, <500ms for analytics, and ~5K activities/sec processing.
+# Strava System Design
+
+## Functional Requirements
+- **Activity Tracking**: Record GPS-based activities (runs, rides) with metrics (distance, pace, elevation).
+- **Activity Upload**: Upload activities (bulk or real-time) from devices.
+- **Real-time Sharing**: Allow friends to follow live activities.
+- **Leaderboards**: Display real-time rankings by distance, region, or time range.
+- **Analytics**: Provide stats (e.g., weekly miles, personal records).
+- **Social Features**: Share activities, comment, and follow users.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~1M daily active users (DAU), ~10M activities/day, ~10K QPS for analytics.
+- **Latency**: <200ms for activity ingestion, <500ms for analytics, ~5K activities/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for activity data/leaderboards, strong for user metadata.
+- **Security**: Protect GPS data, enforce privacy settings.
+
+## Write-Heavy Considerations
+- **High Throughput**: Ingest ~10M activities/day (~120 activities/sec peak).
+- **Durability**: Persist activity data reliably for history and analytics.
+- **Ingestion Speed**: Fast processing of GPS streams and bulk uploads.
+
+## Improvements
+- **Activity Ingestion**: 
+  - Use **Kafka** for GPS/fitness data streams, partitioned by `user_id` for scalability.
+  - Topics: `activities:user_id`, `live_updates:user_id`.
+- **Storage**: 
+  - Store activities in **Cassandra** {`activity_id`, `user_id`, `gps_points`, `timestamp`, `metrics`, `privacy`} for high write throughput.
+  - Partition by `user_id`, cluster by `timestamp`.
+- **Analytics**: 
+  - Use **Spark** for batch analytics (leaderboards, stats).
+  - Cache results in **Redis** (`stats:user_id`, `leaderboard:region`).
+- **Offline Activity Tracking**: 
+  - Record GPS data locally using device sensors, store in memory.
+  - Persist to local storage (e.g., **Core Data/Room DB**) every ~10s to prevent loss.
+  - Upload in bulk (optionally chunked) on completion or when online.
+- **Real-time Activity Sharing**: 
+  - Send location updates every 2-5s from athlete’s device to server.
+  - Use **polling** (clients request updates every 2-5s with offset) instead of WebSockets for simplicity.
+  - **Smart Buffering**: Delay updates by a few seconds for smooth movement, compensating for network latency.
+- **Real-time Leaderboard**: 
+  - Use **Redis Sorted Sets** (`leaderboard:run:USA`, member: `user_id`, score: distance).
+  - Store activity timestamps in sorted sets, activity data in hashes.
+  - Query with **ZRANGEBYSCORE** for time ranges, aggregate distances, and sort.
+  - Cache results in Redis (`leaderboard:run:USA:1w`, TTL: 10min).
+- **Edge Cases**: 
+  - **GPS Errors**: Filter outliers (e.g., impossible speeds) during ingestion.
+  - **Large Uploads**: Process chunked uploads via Kafka.
+  - **Privacy Settings**: Filter activities on read based on `privacy` field.
+  - **Activity Duplicates**: Use idempotency keys (`activity_id`) in Kafka/Cassandra.
+  - **Incomplete Data**: Validate inputs (e.g., GPS format, metrics).
+- **Monitoring**: Track ingestion latency, analytics accuracy, cache hit ratio, activity processing success rate, Redis memory usage, Spark job latency.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for activity uploads and analytics.
+  - **gRPC**: Fast internal communication for data processing.
+  - **TCP**: Reliable Kafka/Cassandra connections.
+- **APIs**:
+  - `POST /activities`: Upload activity (bulk or chunked).
+    ```json
+    {
+      "user_id": "uuid",
+      "activity_id": "uuid",
+      "gps_points": [{"lat": 37.7749, "lon": -122.4194, "time": 1697056800}, ...],
+      "metrics": {"distance": 10.5, "pace": 6.5},
+      "privacy": "public"
+    }
+    ```
+  - `GET /leaderboard/:type/:region/:time_range`: Retrieve leaderboard.
+    ```json
+    {
+      "type": "run",
+      "region": "USA",
+      "time_range": "1w",
+      "leaders": [{"user_id": "uuid", "distance": 50.2}, ...]
+    }
+    ```
+  - `GET /live/:user_id`: Poll for real-time activity updates.
+
+## Trade-offs
+- **Cassandra vs. DynamoDB**: 
+  - **Cassandra**: Cost-effective, scalable writes. 
+  - **DynamoDB**: Simpler, costlier. 
+  - *Choice*: **Cassandra** for scalability.
+- **Real-time vs. Batch Analytics**: 
+  - **Real-time**: Fresh, resource-heavy. 
+  - **Batch**: Efficient, stale. 
+  - *Choice*: **Batch** with periodic Redis updates.
+- **Kafka vs. RabbitMQ**: 
+  - **Kafka**: Durable, high-throughput. 
+  - **RabbitMQ**: Simpler, less robust. 
+  - *Choice*: **Kafka** for stream volume.
+
+## Why Kafka + Cassandra?
+- **Kafka**: Reliable, partitioned ingestion for GPS streams.
+- **Cassandra**: Scalable storage for high-write activity data.
+
+## Scalability Estimates
+- **Users**: ~1M DAU via Kafka partitioning, Cassandra sharding.
+- **Activities**: ~10M/day (~120 activities/sec) with Kafka/Cassandra.
+- **Analytics**: ~10K QPS for leaderboard/stats queries.
+
+## Latency/Throughput Targets
+- **Ingestion**: <200ms (Kafka).
+- **Analytics**: <500ms (Redis/Spark).
+- **Processing**: ~5K activities/sec.
+
+## Database Schemas
+- **Cassandra Activities Table**:
+  ```sql
+  CREATE TABLE activities (
+    user_id UUID,
+    activity_id UUID,
+    gps_points LIST<FROZEN<MAP<TEXT, DOUBLE>>>,
+    timestamp TIMESTAMP,
+    metrics MAP<TEXT, DOUBLE>,
+    privacy TEXT,
+    PRIMARY KEY (user_id, timestamp, activity_id)
+  ) WITH CLUSTERING ORDER BY (timestamp DESC);
+  ```
+  - **Consistency**: Eventual for activity data, quorum writes.
+  - **Availability**: Multi-region replication.
+- **PostgreSQL Users Table** (for metadata):
+  ```sql
+  CREATE TABLE users (
+    user_id UUID PRIMARY KEY,
+    username TEXT,
+    preferences JSONB,
+    created_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for user metadata (ACID).
+  - **Availability**: Multi-AZ.
+
+## Cache Schemas
+- **Redis**:
+  - `stats:user_id`: Activity stats (JSON, TTL: 1hr).
+  - `leaderboard:type:region`: Sorted set {`user_id`, `distance`}.
+  - `live:user_id`: Recent location updates (list, TTL: 10s).
+  - **Consistency**: Eventual, sync with Cassandra/Spark.
+- **Tricks**: Redis pipelining for batch leaderboard queries, LRU for memory management.
+
+## Consistency vs. Availability
+- **Cassandra**: 
+  - **Eventual Consistency**: For activity data (quorum reads/writes).
+  - **High Availability**: Multi-region.
+- **PostgreSQL**: 
+  - **Strong Consistency**: For user metadata (transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Eventual Consistency**: For stats/leaderboards.
+  - **High Availability**: Redis Cluster.
+- **Tricks**: Cassandra lightweight transactions for critical updates, Redis Lua scripts for leaderboard updates.
+
+## Additional Considerations
+- **Security**: 
+  - Encrypt GPS data in transit (HTTPS) and at rest (**Cassandra encryption**).
+  - Use **JWT auth** for API access.
+- **Analytics**: Log activities in **Kafka**, aggregate in **Redshift** for trends.
+- **Notifications**: Push updates for comments/follows via **SNS**.
+- **Rate Limiting**: Cap activity uploads per user (Redis token bucket).
+- **Backup**: Archive activities to **S3/Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (Kafka, Cassandra, Spark, Redis) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and detailed schemas for completeness.
+
+## Summary
+Strava uses **Kafka** for activity ingestion, **Cassandra** for storage, **Redis** for real-time leaderboards, and **Spark** for analytics. It supports offline tracking, real-time sharing via **polling**, and scales to 1M DAU, 10M activities/day, 10K QPS with <200ms ingestion, <500ms analytics. Handles GPS errors, privacy, and duplicates with **HTTPS/gRPC** for secure, fast communication, ensuring FAANG-readiness.
+
 
 ---
 ---
 
 
-### 17. FB Live Comments
-**Improvements:**
-- **Comment Ingestion**: Use Kafka for high-throughput comment streams, partitioned by video_id.
-- **Storage**: Users can post comments on a live video by sending a POST request to POST /comments/:liveVideoId with the comment message. The request is validated by the server, and the comment is stored in a DynamoDB database. The commenter client sends the comment to the comment management service, which stores it and later retrieves comments for display. DynamoDB is used for its scalability and speed. While storing and querying comments is simple, complexities arise in how comments are delivered to viewers in real-time.
-To allow viewers to **see comments made before they joined a live feed**, we use infinite scrolling with cursor-based pagination. Upon joining, users can fetch recent comments with GET /comments/:liveVideoId, using cursor pagination to retrieve the N most recent comments before a certain timestamp. Cursor pagination is more efficient than offset pagination, ensuring stable scrolling and consistent performance even as comment volume grows. DynamoDB's LastEvaluatedKey feature works well with this approach, ensuring scalability and reliability.
-We use Server-Sent Events (SSE) instead of WebSockets for **real-time comment broadcasting** because SSE is simpler, more lightweight, and better suited for one-way communication (server to client). WebSockets require a persistent bi-directional connection and more complex management, which adds overhead. SSE is easier to implement, scales better for broadcast scenarios, and handles message delivery in a more efficient manner for our use case, where the server pushes new comments to multiple clients. However, scalability challenges still exist, which will need to be addressed in future improvements.
-To **scale SSE for millions of concurrent viewers**, we must horizontally scale by adding multiple servers since a single server cannot handle the load. The challenge arises when viewers are connected to different servers, making it difficult to broadcast comments to all viewers of the same live video. For example, Server 1 can send a comment to UserA, but not to UserB connected to Server 2. To solve this, we can use a pub/sub system like Redis or Kafka to ensure messages are broadcasted to all servers handling viewer connections. Redis offers low latency but lacks message persistence, while Kafka provides guaranteed delivery and persistence but with higher latency. The choice between these systems depends on the tradeoffs of scalability, message guarantees, and operational complexity.
-**But this is better:**
-To allocate viewers of the same live video to the same server, we can use two strategies: 1) Intelligent Routing via Scripts or Configuration, where a Layer 7 load balancer like NGINX or Envoy uses consistent hashing based on liveVideoId to route viewers to the same server. 2) Dynamic Lookup via Coordination Service, where a service like Zookeeper stores liveVideoId-to-server mappings and updates as needed. While both approaches are valid, the former is simpler, while the latter provides more flexibility at the cost of added complexity.
-- **Delivery**: Use WebSockets to push comments to viewers in real-time.
-- **Edge Cases**: Handle comment spam (rate-limiting), deleted comments (tombstones), high QPS (scale WebSockets), comment ordering (sequence numbers), and viewer lag (buffer comments).
-- **Monitoring**: Track comment latency, delivery success rate, queue backlog, and comment processing success rate.
-- **Trade-offs:**
-  - **Kafka vs. RabbitMQ**: Kafka scales for high throughput; RabbitMQ is simpler but less robust. Choose Kafka for live comments.
-  - **WebSockets vs. Polling**: WebSockets are real-time but complex; polling is simpler but delayed. Choose WebSockets for UX.
-  - **Cassandra vs. DynamoDB**: Cassandra is cost-effective for writes; DynamoDB is simpler but costlier. Choose Cassandra for scalability.
-- **Why Kafka + WebSockets?**: Kafka handles comment ingestion, and WebSockets ensure real-time delivery.
-- **Scalability Estimates**: Supports ~100K comments/sec, ~1M viewers/video, and ~50K QPS for delivery with Kafka and WebSocket scaling.
-- **Latency/Throughput Targets**: Target <100ms for comment delivery, <200ms for ingestion, and ~10K comments/sec processing.
+# Facebook Live Comments System Design
 
-## Strong Consistency Systems
-These prioritize transactional integrity and failure handling.
+## Functional Requirements
+- **Comment Submission**: Users post comments on live videos via POST request.
+- **Real-time Delivery**: Broadcast comments to all viewers in real-time.
+- **Historical Comments**: Fetch comments made before joining via cursor-based pagination.
+- **Comment Management**: Delete/moderate comments, handle spam.
+- **Viewer Scaling**: Support millions of concurrent viewers per live video.
+- **Analytics**: Track comment engagement for insights.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~100K comments/sec, ~1M viewers/video, ~50K QPS for delivery.
+- **Latency**: <100ms for comment delivery, <200ms for ingestion, ~10K comments/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Strong for comment storage to prevent duplicates, eventual for delivery.
+- **Security**: Prevent spam, ensure authenticated access.
+
+## Strong Consistency Considerations
+- **Transactional Integrity**: Ensure comments are stored atomically to avoid duplicates or loss.
+- **Failure Handling**: Handle server failures, network issues, or viewer disconnections gracefully.
+
+## Improvements
+- **Comment Ingestion**: 
+  - Use **Kafka** for high-throughput comment streams, partitioned by `video_id` for load balancing.
+  - Producers send comments to topics (e.g., `comments:video_id`).
+- **Storage**: 
+  - Store comments in **DynamoDB** {`video_id`, `comment_id`, `user_id`, `content`, `timestamp`, `is_deleted`} for scalability and speed.
+  - Validate POST requests to `/comments/:liveVideoId` at the server, store in DynamoDB.
+  - Alternative: **Cassandra** for cost-effective high-write throughput, partitioned by `video_id`.
+- **Historical Comments**: 
+  - Support **infinite scrolling** with **cursor-based pagination** via GET `/comments/:liveVideoId`.
+  - Use DynamoDB’s **LastEvaluatedKey** to fetch N recent comments before a timestamp, ensuring stable, efficient scrolling.
+- **Real-time Comment Broadcasting**: 
+  - Use **Server-Sent Events (SSE)** over WebSockets for lightweight, one-way delivery.
+  - SSE scales better for broadcasting comments to multiple clients, simpler to implement.
+  - **Scaling SSE**: 
+    - Horizontally scale servers to handle millions of viewers.
+    - Use **Redis Pub/Sub** for low-latency comment broadcasting across servers.
+    - Alternative: **Kafka** for guaranteed delivery but higher latency.
+- **Viewer Allocation**: 
+  - Route viewers of the same `video_id` to the same server using **consistent hashing** in a **Layer 7 load balancer** (e.g., NGINX/Envoy).
+  - Alternative: **ZooKeeper** for dynamic `video_id`-to-server mappings, offering flexibility at higher complexity.
+- **Delivery**: 
+  - Use **WebSockets** as fallback for real-time delivery if SSE is insufficient.
+  - Fanout comments via Redis Pub/Sub or Kafka to all viewer servers.
+- **Edge Cases**: 
+  - **Comment Spam**: Apply **rate-limiting** (Redis token bucket) and CAPTCHA for suspicious users.
+  - **Deleted Comments**: Mark as tombstones in DynamoDB/Cassandra (`is_deleted: true`).
+  - **High QPS**: Scale WebSocket/SSE servers and Redis Pub/Sub.
+  - **Comment Ordering**: Use sequence numbers (`comment_id` with timestamp) for consistent display.
+  - **Viewer Lag**: Buffer comments in Redis (`buffer:video_id`, TTL: 10s) to smooth delivery.
+- **Monitoring**: Track comment delivery latency, notification success rate, Kafka queue backlog, DynamoDB write throughput, SSE connection stability, Redis Pub/Sub latency.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for comment submission and retrieval.
+  - **SSE**: Lightweight, real-time comment broadcasting.
+  - **WebSocket**: Fallback for real-time delivery.
+  - **gRPC**: Fast internal communication for comment processing.
+  - **TCP**: Reliable Kafka/DynamoDB connections.
+- **APIs**:
+  - `POST /comments/:liveVideoId`: Submit comment on live video.
+    ```json
+    {
+      "user_id": "uuid",
+      "comment_id": "uuid",
+      "content": "Great stream!",
+      "timestamp": 1697056800000
+    }
+    ```
+  - `GET /comments/:liveVideoId`: Fetch comments with cursor pagination.
+    ```json
+    {
+      "video_id": "uuid",
+      "limit": 50,
+      "cursor": "1697056800000",
+      "comments": [{"comment_id": "uuid", "content": "Great stream!", ...}]
+    }
+    ```
+
+## Trade-offs
+- **Kafka vs. RabbitMQ**: 
+  - **Kafka**: Scalable, durable, high-throughput. 
+  - **RabbitMQ**: Simpler, less robust. 
+  - *Choice*: **Kafka** for comment volume.
+- **WebSockets vs. Polling**: 
+  - **WebSockets**: Real-time, complex. 
+  - **Polling**: Simpler, delayed. 
+  - *Choice*: **SSE** for lightweight broadcasting, WebSockets as fallback.
+- **Cassandra vs. DynamoDB**: 
+  - **Cassandra**: Cost-effective, scalable writes. 
+  - **DynamoDB**: Simpler, costlier. 
+  - *Choice*: **DynamoDB** for simplicity, Cassandra for cost.
+
+## Why Kafka + DynamoDB/SSE?
+- **Kafka**: Reliable, partitioned comment ingestion.
+- **DynamoDB**: Fast, scalable storage with strong consistency.
+- **SSE**: Lightweight, efficient real-time broadcasting.
+
+## Scalability Estimates
+- **Comments**: ~100K comments/sec via Kafka partitioning.
+- **Viewers**: ~1M per video with SSE/WebSocket scaling.
+- **Delivery**: ~50K QPS for comment broadcasting.
+
+## Latency/Throughput Targets
+- **Comment Delivery**: <100ms (SSE/WebSocket).
+- **Ingestion**: <200ms (Kafka/DynamoDB).
+- **Processing**: ~10K comments/sec.
+
+## Database Schemas
+- **DynamoDB Comments Table**:
+  ```sql
+  Table: comments
+  Partition Key: video_id (String)
+  Sort Key: timestamp (Number)
+  Attributes:
+    comment_id (String)
+    user_id (String)
+    content (String)
+    is_deleted (Boolean)
+  ```
+  - **Consistency**: Strong for writes (conditional updates).
+  - **Availability**: Multi-region.
+- **Cassandra Comments Table** (alternative):
+  ```sql
+  CREATE TABLE comments (
+    video_id UUID,
+    timestamp TIMESTAMP,
+    comment_id UUID,
+    user_id UUID,
+    content TEXT,
+    is_deleted BOOLEAN,
+    PRIMARY KEY (video_id, timestamp, comment_id)
+  ) WITH CLUSTERING ORDER BY (timestamp DESC);
+  ```
+  - **Consistency**: Eventual, quorum writes.
+- **PostgreSQL Videos Table** (for metadata):
+  ```sql
+  CREATE TABLE videos (
+    video_id UUID PRIMARY KEY,
+    user_id UUID,
+    title TEXT,
+    created_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for video metadata (ACID).
+
+## Cache Schemas
+- **Redis**:
+  - `comments:video_id`: Recent comments (list, TTL: 10min).
+  - `buffer:video_id`: Buffered comments for lag (list, TTL: 10s).
+  - **Consistency**: Eventual, sync with DynamoDB/Cassandra.
+- **Tricks**: Redis pipelining for batch comment fetches, LRU for memory management.
+
+## Consistency vs. Availability
+- **DynamoDB/Cassandra**: 
+  - **Strong Consistency**: For comment writes (conditional writes/quorum).
+  - **High Availability**: Multi-region.
+- **PostgreSQL**: 
+  - **Strong Consistency**: For video metadata (transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Eventual Consistency**: For cached comments/buffers.
+  - **High Availability**: Redis Cluster.
+- **Tricks**: DynamoDB conditional writes for idempotency, Cassandra lightweight transactions for critical updates.
+
+## Additional Considerations
+- **Security**: 
+  - Encrypt comments in transit (HTTPS/SSE) and at rest (**DynamoDB encryption**).
+  - Use **JWT auth** for API/SSE access.
+- **Analytics**: Log comments in **Kafka**, aggregate in **Redshift** for engagement insights.
+- **Notifications**: Alert on spam detection via **SNS**.
+- **Rate Limiting**: Cap comment submissions per user (Redis token bucket).
+- **Backup**: Archive comments to **S3/Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (Kafka, DynamoDB, SSE, WebSockets, Redis) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, alternative Cassandra storage, and detailed schemas for completeness.
+
+## Summary
+Facebook Live Comments uses **Kafka** for comment ingestion, **DynamoDB/Cassandra** for storage, **SSE** (with WebSocket fallback) for real-time broadcasting, and **Redis Pub/Sub** for viewer scaling. It supports 100K comments/sec, 1M viewers/video, 50K QPS with <100ms delivery, <200ms ingestion. Strong consistency for writes, cursor pagination for history, and robust edge case handling (spam, lag) with **HTTPS/gRPC/SSE** ensure FAANG-readiness.
 
 ---
 ---
 
 
-### 18. Online Ticket Booking System
-**Improvements:**
-- **Concurrency**: To improve the booking experience by reserving tickets, we can implement a distributed lock mechanism with a Time-To-Live (TTL). When a user selects a ticket, the Booking Service attempts to acquire a lock on that ticket in a distributed lock system (like Redis) with a 10-minute TTL. Simultaneously, a booking record is created in the database with an "in-progress" status, and the user is redirected to the payment page with a bookingId. If the user completes payment within the TTL, a webhook from the payment processor triggers a database transaction, updating both the ticket status to "sold" and the booking status to "confirmed." If the user abandons the process or the TTL expires, the lock is automatically released, making the ticket available again. This approach prevents overselling and provides a better user experience by temporarily reserving tickets during checkout.
-- To **handle tens of millions of concurrent view requests during peak events**, a multi-faceted approach combining caching, load balancing, and horizontal scaling is crucial. We'll heavily cache static and infrequently changing data like event details and venue information in a fast in-memory store (Redis/Memcached) using a read-through strategy with appropriate Time-to-Live (TTL) policies. Database triggers will ensure cache invalidation upon data updates. Load balancers will distribute incoming traffic evenly across multiple stateless instances of the view API service (horizontal scaling). While maintaining cache consistency and managing a large number of instances present operational challenges, this combination will significantly reduce database load and ensure high availability.
-- To ensure a **good user experience during high-demand booking events with millions of concurrent users**, a virtual waiting queue system can be implemented for extremely popular events. When a user attempts to access the booking page, they are placed in a queue, and a persistent WebSocket connection is established. Users are dequeued based on a set schedule or criteria and notified via their WebSocket connection when it's their turn to proceed to the ticket selection process. Simultaneously, the database is updated to grant these users access. While long wait times could be a concern, providing real-time updates on their queue position and estimated wait time via the WebSocket connection can help manage user expectations and mitigate frustration. This approach controls the flow of users, preventing system overload and ensuring a smoother experience for everyone.
-- **Reservation Flow**: Reserve seats in Redis (with TTL) → process payment → confirm in DB (PostgreSQL).
-- **Edge Cases**: Handle payment failures (rollback reservation), expired reservations (auto-release seats), oversold tickets (audit logs), double bookings (idempotency keys), and high demand (queue requests).
-- **Monitoring**: Track booking success rate, lock contention, payment latency, and seat reservation accuracy.
-- **Trade-offs:**
-  - **Optimistic vs. Pessimistic Locking**: Optimistic is scalable but risks conflicts; pessimistic is safe but slower. Choose optimistic for most cases, with pessimistic for high-demand events.
-  - **Redis vs. DB for Reservation**: Redis is fast but volatile; DB is durable but slower. Use Redis with DB confirmation for speed and reliability.
-  - **Queue vs. No Queue**: Queuing handles spikes but adds latency; no queuing is fast but risks failures. Use queuing for high-contention events.
-- **Why Optimistic + Redis/DB?**: Optimistic locking scales for typical loads, and Redis ensures fast reservations with DB for durability.
-- **Scalability Estimates**: Supports ~10K bookings/sec, ~1M daily tickets, and ~50K QPS for reservations with Redis and PostgreSQL scaling.
-- **Latency/Throughput Targets**: Target <200ms for seat reservation, <500ms for booking, and ~5K bookings/sec processing.
+# Online Ticket Booking System Design
+
+## Functional Requirements
+- **Ticket Reservation**: Reserve seats temporarily during booking.
+- **Ticket Purchase**: Process payments and confirm bookings.
+- **Event Browsing**: View event details, seat availability, and prices.
+- **Virtual Waiting Queue**: Manage high-demand events with millions of concurrent users.
+- **Order History**: Track user bookings and ticket status.
+- **Cancellation/Refunding**: Handle cancellations and refund requests.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~10K bookings/sec, ~1M daily tickets, ~50K QPS for reservations.
+- **Latency**: <200ms for seat reservation, <500ms for booking, ~5K bookings/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Strong for booking and inventory to prevent overselling, eventual for event details.
+- **Security**: Secure payment processing, prevent fraudulent bookings.
+
+## Strong Consistency Considerations
+- **Transactional Integrity**: Ensure atomic seat reservations and payment confirmations.
+- **Failure Handling**: Manage payment failures, expired reservations, and double bookings.
+
+## Improvements
+- **Concurrency**: 
+  - Implement **distributed locking** with **Redis** for seat reservations, using a 10-minute **TTL**.
+  - On ticket selection, **Booking Service** acquires lock (`lock:ticket_id`), creates an "in-progress" booking in **PostgreSQL**, and redirects to payment with `bookingId`.
+  - On payment completion, a webhook triggers a **PostgreSQL transaction** to update ticket status to "sold" and booking to "confirmed".
+  - If TTL expires or user abandons, lock auto-releases, making ticket available.
+- **High Concurrent View Requests**: 
+  - Cache static event/venue data in **Redis/Memcached** using read-through strategy with TTL (e.g., 1hr).
+  - Use **database triggers** to invalidate cache on updates.
+  - Distribute traffic via **Layer 7 load balancer** (e.g., NGINX) across stateless API instances for horizontal scaling.
+- **Virtual Waiting Queue**: 
+  - For high-demand events, place users in a **queue** managed by **Redis** (`queue:event_id`, sorted set).
+  - Establish **WebSocket** connection for real-time queue position updates and estimated wait times.
+  - Dequeue users based on schedule, update PostgreSQL to grant access, and notify via WebSocket.
+- **Reservation Flow**: 
+  - Reserve seats in Redis (`reservation:event_id:ticket_id`, TTL: 10min).
+  - Process payment via external processor.
+  - Confirm booking in PostgreSQL with strong consistency.
+- **Edge Cases**: 
+  - **Payment Failures**: Rollback reservation in PostgreSQL, release Redis lock.
+  - **Expired Reservations**: Auto-release seats via Redis TTL.
+  - **Oversold Tickets**: Maintain audit logs in PostgreSQL for disputes.
+  - **Double Bookings**: Use idempotency keys (`bookingId`) for payment requests.
+  - **High Demand**: Queue requests in Redis/Kafka to prevent overload.
+- **Monitoring**: Track booking success rate, lock contention, payment latency, seat reservation accuracy, queue wait times, Redis cache hit ratio.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for booking and event browsing.
+  - **WebSocket**: Real-time queue updates and booking status.
+  - **gRPC**: Fast internal communication for reservation/payment processing.
+  - **TCP**: Reliable Redis/PostgreSQL connections.
+- **APIs**:
+  - `POST /reservations`: Reserve seats for an event.
+    ```json
+    {
+      "user_id": "uuid",
+      "event_id": "uuid",
+      "ticket_ids": ["uuid1", "uuid2"],
+      "bookingId": "uuid"
+    }
+    ```
+  - `POST /bookings/:bookingId/confirm`: Confirm booking post-payment.
+    ```json
+    {
+      "bookingId": "uuid",
+      "payment_id": "uuid",
+      "status": "confirmed"
+    }
+    ```
+  - `GET /events/:event_id`: Fetch event details and seat availability.
+
+## Trade-offs
+- **Optimistic vs. Pessimistic Locking**: 
+  - **Optimistic**: Scalable, risks conflicts. 
+  - **Pessimistic**: Safe, slower. 
+  - *Choice*: **Optimistic** for most cases, pessimistic (Redis locks) for high-demand events.
+- **Redis vs. DB for Reservation**: 
+  - **Redis**: Fast, volatile. 
+  - **DB**: Durable, slower. 
+  - *Choice*: **Redis** with PostgreSQL confirmation.
+- **Queue vs. No Queue**: 
+  - **Queuing**: Handles spikes, adds latency. 
+  - **No Queuing**: Fast, risks failures. 
+  - *Choice*: **Queuing** for high-contention events.
+
+## Why Optimistic + Redis/DB?
+- **Optimistic Locking**: Scales for typical loads, minimizes contention.
+- **Redis/DB**: Redis for fast reservations, PostgreSQL for durability.
+
+## Scalability Estimates
+- **Bookings**: ~10K bookings/sec via Redis locking, Kafka buffering.
+- **Daily Tickets**: ~1M with PostgreSQL sharding.
+- **Reservations**: ~50K QPS with Redis caching.
+
+## Latency/Throughput Targets
+- **Seat Reservation**: <200ms (Redis).
+- **Booking**: <500ms (PostgreSQL).
+- **Processing**: ~5K bookings/sec.
+
+## Database Schemas
+- **PostgreSQL Tickets Table**:
+  ```sql
+  CREATE TABLE tickets (
+    ticket_id UUID PRIMARY KEY,
+    event_id UUID,
+    seat_number TEXT,
+    status TEXT, -- 'available', 'sold'
+    booking_id UUID,
+    updated_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for ticket updates (SERIALIZABLE transactions).
+  - **Availability**: Multi-AZ replication.
+- **PostgreSQL Bookings Table**:
+  ```sql
+  CREATE TABLE bookings (
+    booking_id UUID PRIMARY KEY,
+    user_id UUID,
+    event_id UUID,
+    ticket_ids JSONB,
+    status TEXT, -- 'in-progress', 'confirmed', 'failed'
+    created_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for booking status.
+- **PostgreSQL Events Table**:
+  ```sql
+  CREATE TABLE events (
+    event_id UUID PRIMARY KEY,
+    name TEXT,
+    venue_id UUID,
+    date TIMESTAMP,
+    details JSONB
+  );
+  ```
+  - **Consistency**: Eventual for details, strong for inventory.
+
+## Cache Schemas
+- **Redis**:
+  - `reservation:event_id:ticket_id`: Reservation status (flag, TTL: 10min).
+  - `event:event_id`: Event details (JSON, TTL: 1hr).
+  - `queue:event_id`: User queue positions (sorted set, TTL: event duration).
+  - **Consistency**: Eventual, sync with PostgreSQL.
+- **Tricks**: Redis pipelining for batch reservations, LRU for cache eviction.
+
+## Consistency vs. Availability
+- **PostgreSQL**: 
+  - **Strong Consistency**: For bookings/tickets (SERIALIZABLE transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Eventual Consistency**: For reservations/event data.
+  - **High Availability**: Redis Cluster.
+- **Kafka**: 
+  - **Strong Consistency**: For event durability.
+  - **High Availability**: Multi-broker clusters.
+- **Tricks**: PostgreSQL advisory locks for ticket updates, Redis Lua scripts for atomic reservations.
+
+## Additional Considerations
+- **Security**: 
+  - Use **PCI-compliant payment gateway** for transactions.
+  - Implement **JWT auth** for API/WebSocket access.
+- **Analytics**: Log bookings in **Kafka**, aggregate in **Redshift** for demand analysis.
+- **Notifications**: Real-time queue/booking updates via **WebSocket**, alerts via **SNS**.
+- **Rate Limiting**: Cap booking attempts per user (Redis token bucket).
+- **Backup**: PostgreSQL snapshots to **S3/Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (Redis, PostgreSQL, Kafka, WebSocket) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and detailed schemas for completeness.
+
+## Summary
+Online Ticket Booking uses **Redis** for fast reservations, **PostgreSQL** for durable bookings, **Kafka** for event ingestion, and **WebSocket** for queue updates. It scales to 10K bookings/sec, 1M daily tickets, 50K QPS with <200ms reservations, <500ms bookings. Strong consistency via SERIALIZABLE transactions, robust concurrency with distributed locks, and virtual queues ensure FAANG-readiness with **HTTPS/gRPC/WebSocket**.
 
 ---
 ---
 
 
-### 19. E-Commerce Website (Amazon)
-**Improvements:**
-- **Catalog**: Store products in a NoSQL DB (DynamoDB) for flexible schemas. Index in Elasticsearch for fast search.
-- **Cart**: Use Redis for in-memory carts (user_id: cart_items) with TTL to handle abandoned carts.
-- **Order Processing**: Use a saga pattern (Kafka + microservices) for distributed transactions (inventory, payment, shipping).
-- **Idempotency**: Ensure checkout is idempotent using a unique order_id.
-- **Edge Cases**: Handle out-of-stock items (real-time inventory checks), failed payments (retries), partial orders (rollback), cart conflicts (optimistic locking), and order fraud (anomaly detection).
-- **Monitoring**: Track checkout success rate, search latency, inventory accuracy, and order processing latency.
-- **Trade-offs:**
-  - **Monolith vs. Microservices**: Monolith is simpler but less scalable; microservices are flexible but complex. Choose microservices for scalability.
-  - **Eventual vs. Strong Consistency**: Eventual is scalable but risks overselling; strong is safe but slower. Use strong consistency for inventory.
-  - **DynamoDB vs. Cassandra**: DynamoDB is simpler but costlier; Cassandra is scalable but complex. Choose DynamoDB for ease of use.
-- **Why Microservices + DynamoDB?**: Microservices scale independently, and DynamoDB handles high read/write loads.
-- **Scalability Estimates**: Supports ~100M daily active users, ~1M orders/sec, and ~100K QPS for searches with DynamoDB and Elasticsearch scaling.
-- **Latency/Throughput Targets**: Target <100ms for searches, <500ms for checkout, and ~10K orders/sec processing.
+# E-Commerce Website (Amazon) System Design
+
+## Functional Requirements
+- **Product Catalog**: Browse and search products by category, name, or attributes.
+- **Shopping Cart**: Add/remove items, persist across sessions.
+- **Checkout**: Process orders with payment and shipping details.
+- **Order Management**: Track order status, handle cancellations/refunds.
+- **Inventory Management**: Real-time stock updates across warehouses.
+- **User Accounts**: Manage profiles, addresses, and payment methods.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~100M daily active users (DAU), ~1M orders/sec, ~100K QPS for searches.
+- **Latency**: <100ms for searches, <500ms for checkout, ~10K orders/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Strong for inventory/orders to prevent overselling, eventual for catalog searches.
+- **Security**: Secure payment processing, prevent fraud, protect user data.
+
+## Strong Consistency Considerations
+- **Transactional Integrity**: Ensure atomic inventory updates and order confirmations.
+- **Failure Handling**: Manage payment failures, partial orders, and cart conflicts.
+
+## Improvements
+- **Catalog**: 
+  - Store products in **DynamoDB** {`product_id`, `name`, `category`, `price`, `attributes`} for flexible schemas.
+  - Index in **Elasticsearch** for fast text and faceted search (e.g., by category, price range).
+- **Cart**: 
+  - Use **Redis** for in-memory carts (`cart:user_id`, hash of `item_id:quantity`, TTL: 7 days) to handle abandoned carts.
+  - Persist critical cart updates to **DynamoDB** for durability.
+- **Order Processing**: 
+  - Implement **saga pattern** with **Kafka** for distributed transactions:
+    - **Inventory Service**: Reserve stock.
+    - **Payment Service**: Process payment.
+    - **Shipping Service**: Generate shipping label.
+  - Coordinate via Kafka topics (e.g., `order:reserve`, `order:pay`, `order:ship`).
+- **Idempotency**: 
+  - Ensure checkout idempotency using unique `order_id` in Kafka/DynamoDB.
+  - Store `order_id` in Redis (`order:order_id`, flag) for quick duplicate checks.
+- **Edge Cases**: 
+  - **Out-of-Stock**: Real-time inventory checks in DynamoDB during checkout.
+  - **Failed Payments**: Retry via Kafka events, rollback inventory if final failure.
+  - **Partial Orders**: Compensate via saga rollback (release inventory, refund payment).
+  - **Cart Conflicts**: Use **optimistic locking** in Redis (version field in `cart:user_id`).
+  - **Order Fraud**: Apply anomaly detection (e.g., unusual purchase patterns) with **Spark** analytics.
+- **Monitoring**: Track checkout success rate, search latency, inventory accuracy, order processing latency, Kafka queue lag, Elasticsearch query throughput.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for catalog, cart, and checkout.
+  - **gRPC**: Fast internal communication for microservices (inventory, payment, shipping).
+  - **TCP**: Reliable Kafka/DynamoDB connections.
+- **APIs**:
+  - `GET /products/search`: Search products by query or filters.
+    ```json
+    {
+      "query": "laptop",
+      "filters": {"category": "electronics", "max_price": 1000},
+      "products": [{"product_id": "uuid", "name": "Laptop", ...}]
+    }
+    ```
+  - `POST /cart`: Add item to cart.
+    ```json
+    {
+      "user_id": "uuid",
+      "item_id": "uuid",
+      "quantity": 2
+    }
+    ```
+  - `POST /orders`: Process checkout with payment.
+    ```json
+    {
+      "user_id": "uuid",
+      "order_id": "uuid",
+      "items": [{"item_id": "uuid", "quantity": 2}],
+      "payment": {...}
+    }
+    ```
+
+## Trade-offs
+- **Monolith vs. Microservices**: 
+  - **Monolith**: Simpler, less scalable. 
+  - **Microservices**: Flexible, complex. 
+  - *Choice*: **Microservices** for scalability.
+- **Eventual vs. Strong Consistency**: 
+  - **Eventual**: Scalable, risks overselling. 
+  - **Strong**: Safe, slower. 
+  - *Choice*: **Strong** for inventory/orders.
+- **DynamoDB vs. Cassandra**: 
+  - **DynamoDB**: Simpler, costlier. 
+  - **Cassandra**: Scalable, complex. 
+  - *Choice*: **DynamoDB** for ease of use.
+
+## Why Microservices + DynamoDB?
+- **Microservices**: Independent scaling for catalog, cart, and order processing.
+- **DynamoDB**: High read/write throughput, managed scaling.
+
+## Scalability Estimates
+- **Users**: ~100M DAU via microservices, DynamoDB partitioning.
+- **Orders**: ~1M orders/sec with Kafka and DynamoDB.
+- **Searches**: ~100K QPS with Elasticsearch sharding.
+
+## Latency/Throughput Targets
+- **Searches**: <100ms (Elasticsearch).
+- **Checkout**: <500ms (DynamoDB/Kafka).
+- **Processing**: ~10K orders/sec.
+
+## Database Schemas
+- **DynamoDB Products Table**:
+  ```sql
+  Table: products
+  Partition Key: product_id (String)
+  Attributes:
+    name (String)
+    category (String)
+    price (Number)
+    attributes (Map)
+  ```
+  - **Consistency**: Eventual for reads, strong for inventory updates.
+  - **Availability**: Multi-region.
+- **DynamoDB Orders Table**:
+  ```sql
+  Table: orders
+  Partition Key: order_id (String)
+  Attributes:
+    user_id (String)
+    items (List<Map>)
+    status (String)
+    timestamp (Number)
+  ```
+  - **Consistency**: Strong for writes (conditional updates).
+- **DynamoDB Inventory Table**:
+  ```sql
+  Table: inventory
+  Partition Key: item_id (String)
+  Attributes:
+    warehouse_id (String)
+    quantity (Number)
+    last_updated (Number)
+  ```
+  - **Consistency**: Strong for stock updates.
+
+## Cache Schemas
+- **Redis**:
+  - `cart:user_id`: Cart items (hash, TTL: 7 days).
+  - `order:order_id`: Idempotency flag (flag, TTL: 1hr).
+  - `product:product_id`: Product details (JSON, TTL: 1hr).
+  - **Consistency**: Eventual, sync with DynamoDB.
+- **Tricks**: Redis pipelining for batch cart updates, LRU for cache eviction.
+
+## Consistency vs. Availability
+- **DynamoDB**: 
+  - **Strong Consistency**: For inventory/orders (conditional writes).
+  - **High Availability**: Multi-region.
+- **Elasticsearch**: 
+  - **Eventual Consistency**: For product search.
+  - **High Availability**: Sharded clusters.
+- **Redis**: 
+  - **Eventual Consistency**: For carts/products.
+  - **High Availability**: Redis Cluster.
+- **Kafka**: 
+  - **Strong Consistency**: For saga events.
+  - **High Availability**: Multi-broker clusters.
+- **Tricks**: DynamoDB conditional writes for idempotency, Kafka idempotent producers.
+
+## Additional Considerations
+- **Security**: 
+  - Use **PCI-compliant payment gateway**.
+  - Implement **JWT auth** for API access.
+- **Analytics**: Log orders in **Kafka**, aggregate in **Redshift** for sales trends.
+- **Notifications**: Order updates via **SNS**, real-time via **WebSocket**.
+- **Rate Limiting**: Cap checkout attempts per user (Redis token bucket).
+- **Backup**: Archive orders to **S3/Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (DynamoDB, Elasticsearch, Redis, Kafka) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and detailed schemas for completeness.
+
+## Summary
+Amazon E-Commerce uses **microservices** with **DynamoDB** for catalog/orders, **Elasticsearch** for search, **Redis** for carts, and **Kafka** for saga-based order processing. It scales to 100M DAU, 1M orders/sec, 100K QPS with <100ms searches, <500ms checkout. Strong consistency for inventory/orders, idempotent checkout, and robust edge case handling with **HTTPS/gRPC** ensure FAANG-readiness.
 
 ---
 ---
