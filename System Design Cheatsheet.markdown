@@ -125,118 +125,47 @@ These prioritize low-latency data retrieval, efficient caching, and scalability.
 
 ---
 
-**Improvements:**
+**Key Generation:**  
+Use Base62 (a–z, A–Z, 0–9) to encode an incrementing counter (e.g., 125 → "cb"), ensures uniqueness, short, ordered keys (~62^7 = 3.5T URLs). Alternative: use truncated MD5/SHA256 (e.g., hash("https://xyz.com") → "abX1c9Z") with retry or entropy (timestamp, user_id) on collision.
 
-- **Key Generation**:  
-  - Base62 encoding (a–z, A–Z, 0–9) → ~62^7 ≈ 3.5 trillion URLs.  
-  - Use Redis-based atomic distributed counter (ensures uniqueness, linear growth).  
-  - Alternative: MD5(long_url) → truncate (e.g., 6-8 chars), retry on collision.
+**Collision Handling:**  
+Check via Bloom filter (fast memory check). On collision: retry with new hash, add entropy, or fallback to counter. Custom aliases are stored in a separate namespace with strict uniqueness checks.
 
-- **Collision Handling**:  
-  - Bloom filter to check existence.  
-  - On collision: retry with new hash or append entropy (e.g., timestamp/user ID).  
-  - Custom aliases stored separately with uniqueness enforced.
+**Storage (Persistent):**  
+Use DynamoDB (NoSQL, high write/read throughput). Table: `{ short_url (PK), long_url, created_at, expires_at, user_id, is_custom, metadata }`, TTL on `expires_at`. GSI-1: `user_id → short_url`, GSI-2: `is_custom = true → short_url`. Optional LSI on `created_at` for time-based queries.
 
-- **DB Storage (Durable)**:  
-  - **DynamoDB**: `{ short_url (PK), long_url, created_at, expires_at, user_id, is_custom, metadata }`  
-  - TTL index on `expires_at` (auto-expire).  
-  - GSIs for custom queries (e.g., user_id for analytics).  
-  - Optional LSI on creation_time for recent URL fetch.
+**Cache (In-Memory):**  
+Use Redis for hot-path performance. Keys: `short:<key> → long_url`, `long:<hash(long_url)> → short_key`. TTL + LRU eviction. Cache write-through or lazy loading on miss. Eventual consistency; favor availability over consistency.
 
-- **Caching (In-Memory)**:  
-  - Redis:  
-    - short → long: `short:<key> → long_url`  
-    - long → short: `long:<hash(long_url)> → short_key`  
-    - TTL-based, LRU eviction.  
-    - Invalidate on expiry or update.  
-    - Maintain eventual consistency with DB; prioritize availability over strict consistency.
+**Redirect Strategy:**  
+Use 302 (Temporary Redirect) for flexibility (redirects always go through backend). Use 301 (Permanent Redirect) only for immutable or custom/paid URLs.
 
-- **Redirect Strategy**:  
-  - Use **302 Temporary Redirect** → flexibility to update mappings.  
-  - **301 Permanent** for custom/paid URLs if immutability is needed.
+**Sharding:**  
+Shard by short_url prefix (1–2 Base62 chars = 62–384 shards). Avoid user_id-based sharding (hotspots). In DynamoDB, use prefix as PartitionKey, short_url as SortKey.
 
-- **Sharding**:  
-  - By short_url prefix (base62 bucketization).  
-  - Avoid user_id-based sharding → user hotspots.  
-  - PartitionKey: short_url_prefix; SortKey: short_url.
+**Edge Cases:**  
+Expired URLs: auto-evict via TTL in Redis & DB. Malicious URLs: blocklist + async scanner (e.g., Safe Browsing API). Custom aliases: unique namespace. Rate-limiting: token bucket (Redis) per IP/user. Input validation via URI parser + regex.
 
-- **Edge Cases**:  
-  - **Expired URLs**: TTL + lazy cleanup.  
-  - **Malicious URLs**: Maintain URL blocklist (Redis + async scanner).  
-  - **Custom Aliases**: Unique, reserved in separate namespace.  
-  - **Rate-Limiting**: Token bucket per IP/user (Redis).  
-  - **Validation**: Regex/URI parser on input.
+**Monitoring & Observability:**  
+Track QPS, redirect latency, cache hit ratio, collisions, DB latency. Use dashboards + alerts on anomalies (e.g., high 5xx, latency spike). Log structured events for audit & analytics.
 
-- **Monitoring/Observability**:  
-  - Metrics: redirect latency, cache hit ratio, QPS, collision count, DB latency.  
-  - Logs: request logs, error traces.  
-  - Alerts on spike in collision rate or latency.
+**Trade-offs:**  
+Hashing (stateless, compact, risk of collisions) vs Counter (stateful, ordered, unique). SQL (consistency) vs NoSQL (scalability). Redis (fast, volatile, eventually consistent) vs DynamoDB (durable, slower, strongly consistent). Prioritize availability for redirects; use eventual consistency in cache, strong consistency in DB writes.
+
+**Tables & Cache Schema:**  
+DynamoDB: `{ short_url (PK), long_url, user_id, is_custom, created_at, expires_at }`; GSIs for `user_id` & `is_custom`. Redis: `short:<key> → long_url`, `long:<hash> → short_key`.
+
+**Functional Requirements:**  
+Shorten URL (auto/custom), redirect, TTL expiry, analytics, URL validation, rate-limiting, custom aliases, block malicious links.
+
+**Non-Functional Requirements:**  
+Latency: <50ms redirect, <100ms create. QPS: 10K+. Uptime: 99.99%. Scale: 1B+ URLs, 100M DAUs. Durability via DynamoDB. Cache hit ratio >90%. CDN + edge caching optional for static popular URLs.
+
+**Optimizations:**  
+Use CDN for global low-latency on popular keys. Pre-warm cache at creation. Stream analytics via Kafka → ClickHouse. Cold start = DB fetch → cache write. Async analytics writes. Use Redis cluster and DynamoDB auto-scaling. Bloom filters to reduce read amplification. Optional: vanity/custom domains per user/org.
 
 ---
 
-**Trade-offs:**
-
-- **Hashing vs Counter**:  
-  - *Hashing*: stateless, compact, collision-prone.  
-  - *Counter*: unique, ordered, requires global state (use Redis or Snowflake-like ID).
-
-- **SQL vs NoSQL**:  
-  - *NoSQL (DynamoDB)*: horizontal scaling, low latency, TTL support.  
-  - *SQL*: better consistency, limited write scaling.
-
-- **In-Memory vs Persistent Storage**:  
-  - *Redis*: fast access, volatile, eventually consistent.  
-  - *DynamoDB*: slower, persistent, consistent.
-
-- **Consistency vs Availability**:  
-  - Prioritize **availability** (fast redirects) over strong consistency.  
-  - Use **eventual consistency** for cache updates.
-
----
-
-**Tables & Schemas:**
-
-- **DynamoDB (Main Table)**:  
-  - PK: `short_url`  
-  - Attributes: `long_url, created_at, expires_at, user_id, is_custom, metadata`
-
-- **GSI**:  
-  - `user_id → short_url` (for user analytics)  
-  - `is_custom=true → short_url` (for alias lookup)
-
-- **Redis Cache Keys**:  
-  - `short:<key>` → long_url  
-  - `long:<hash>` → short_key
-
----
-
-**Functional Requirements**:
-
-- Create short URL from long URL  
-- Redirect short URL to long URL  
-- Custom aliases  
-- Expiry support  
-- Analytics (click count, geo, timestamp)
-
-**Non-Functional Requirements**:
-
-- Low latency (<50ms redirect, <100ms creation)  
-- High availability (99.99%)  
-- Horizontal scalability (~10K QPS)  
-- Fault-tolerant and durable  
-- Rate-limited abuse prevention  
-- Cache efficiency (hit ratio >90%)  
-
----
-
-**Additional Optimizations**:
-
-- **CDN**: Cache static redirects at edge (for popular URLs).  
-- **Pre-warm Cache**: On URL creation, populate both short→long and long→short mappings.  
-- **Analytics**: Use stream (e.g., Kinesis) → async write to analytics DB (e.g., ClickHouse, Redshift).  
-- **Cold Start Handling**: If cache miss, fetch from DB, update cache.
-
----
 
 
 ### 2. Image Hosting Service
