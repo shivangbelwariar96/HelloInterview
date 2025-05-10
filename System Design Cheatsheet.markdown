@@ -238,171 +238,1349 @@ Alert on spikes in latency, redirect failures, cache miss anomalies.
 - **Scalability Estimates**: Handles ~5K image uploads/sec, ~10M daily active users, and ~1PB storage with S3 scaling and CDN caching.
 - **Latency/Throughput Targets**: Target <100ms for image retrieval, <500ms for uploads, and ~5K requests/sec for downloads.
 
-### 3. Social Media Platform (Twitter/Facebook)
-**Improvements:**
-- **Posts**: Store in a NoSQL DB (Cassandra) with {post_id, user_id, content, timestamp}. Use time-based partitioning for efficient range queries.
-- **Timelines**: Use a hybrid push-pull model: push posts to followers’ timelines (Redis lists) for active users; pull for inactive users to reduce write amplification.
-- **Relationships**: Store follow/friend graphs in a graph DB (Neo4j) or adjacency lists in Redis for fast traversal.
-- **Denormalization**: Store precomputed timelines to avoid joining user and post tables. Update timelines incrementally on new posts.
-- **Sharding**: Shard posts by post_id and timelines by user_id to distribute load. Use consistent hashing to handle node failures.
-- **Edge Cases**: Handle deleted posts (tombstone records), privacy settings (filter on read), viral posts (cache hot content), user bans (block content access), and timeline staleness (refresh periodically).
-- **Monitoring**: Track timeline latency, fanout throughput, graph query performance, and post retrieval success rate.
-- **Trade-offs:**
-  - **Push vs. Pull**: Push ensures low read latency but high write cost for influencers; pull is write-efficient but slower for reads. Hybrid model balances both by pushing to active users only.
-  - **Graph DB vs. Adjacency Lists**: Graph DBs are flexible for complex queries but slower; adjacency lists in Redis are faster for simple follow lookups. Choose adjacency lists for low-latency timeline generation.
-  - **Cassandra vs. DynamoDB**: Cassandra handles high write throughput; DynamoDB is simpler but costlier. Choose Cassandra for write-heavy posts.
-- **Why Hybrid + Cassandra?**: Hybrid model optimizes for both influencers and inactive users, and Cassandra handles high write throughput for posts.
-- **Scalability Estimates**: Supports ~100M daily active users, ~1B posts/day, and ~50K QPS for timeline retrieval with Cassandra clusters and Redis caching.
-- **Latency/Throughput Targets**: Target <200ms for timeline generation, <100ms for post retrieval, and ~10K posts/sec ingestion.
+---
 
-### 4. NewsFeed System
-**Improvements:**
-- **Push vs. Pull**: Use fanout-on-write for active users (push posts to Redis timelines) and fanout-on-read for inactive users to reduce write load.
-- **Caching**: Cache recent posts in Redis and full timelines in Memcached to reduce DB load.
-- **Pagination**: Use cursor-based pagination (timestamp + post_id) for efficient scrolling.
-- **Ranking**: Use a weighted scoring algorithm (e.g., likes, recency, user affinity) computed via a background job (Spark) and stored in Redis.
-- **Handle users with a large number of followers**: For Justin Bieber (and other high-follow accounts), instead of writing to 90+ million followers we can instead add a flag onto the Follow table which indicates that this particular follow isn't precomputed. In the async worker queue, we'll ignore requests for these users. On the read side, when users request their feed via the Feed Service, we can grab their (partially) precomputed feed from the Feed Table and merge it with recent posts from those accounts which aren't precomputed.
-- **Edge Cases**: Handle feed staleness (refresh inactive users’ feeds periodically), deleted posts (remove from cache), skewed user activity (rate-limit influencers), privacy filters (apply on read), and cache inconsistencies (revalidate with DB).
-- **Monitoring**: Track feed refresh latency, ranking accuracy, cache eviction rate, and feed generation success rate.
-- **Trade-offs:**
-  - **Fanout-on-Write vs. Read**: Write is faster for active users but expensive for influencers; read is write-efficient but slower. Choose hybrid to balance latency and cost.
-  - **Real-time vs. Batch Ranking**: Real-time ranking is fresh but compute-heavy; batch ranking is efficient but stale. Choose batch with periodic updates for scalability.
-  - **Redis vs. Memcached**: Redis supports complex data structures but is heavier; Memcached is lightweight but simpler. Use both for complementary caching.
-- **Why Hybrid + Redis?**: Hybrid minimizes write amplification, and Redis ensures low-latency feed retrieval.
-- **Scalability Estimates**: Handles ~50M daily active users, ~500M posts/day, and ~20K QPS for feed generation with Redis and Memcached scaling.
-- **Latency/Throughput Targets**: Target <150ms for feed retrieval, <500ms for ranking updates, and ~5K feeds/sec generation.
+# Social Media Platform Design (Twitter/Facebook)
 
-### 5. Pastebin
-**Improvements:**
-- **Text Storage**: Store pastes in a NoSQL DB (DynamoDB) with {paste_id, content, creation_time, expiration_time, user_id}. Use S3 for large pastes (>1MB).
-- **Key Generation**: Generate short paste IDs using base62 encoding (6-8 chars, ~62^6 URLs) via a distributed counter (ZooKeeper) or hash of content.
-- **Caching**: Cache hot pastes in Redis (LRU eviction) for fast retrieval.
-- **Expiration**: Set TTL in Redis and DB for auto-deletion of expired pastes.
-- **Access Control**: Support public/private pastes with signed URLs for private access.
-- **Edge Cases**: Handle duplicate pastes (hash-based deduplication), malicious content (content filters), high read QPS (CDN like Cloudflare), large pastes (multipart uploads to S3), and expired paste revival (archive option).
-- **Monitoring**: Track paste creation rate, cache hit ratio, expiration cleanup, and paste retrieval latency.
-- **Trade-offs:**
-  - **Counter vs. Hashing**: Counter ensures unique IDs but requires coordination; hashing risks collisions. Choose counter for simplicity and guaranteed uniqueness.
-  - **NoSQL vs. S3**: NoSQL is fast for metadata; S3 is better for large blobs. Use DynamoDB for metadata and S3 for content to balance speed and cost.
-  - **Redis vs. CDN**: Redis is fast for hot data; CDN scales for global access. Use both for optimal performance.
-- **Why Counter + DynamoDB/S3?**: Counter ensures unique IDs, DynamoDB provides low-latency metadata access, and S3 scales for large content.
-- **Scalability Estimates**: Supports ~1K paste creations/sec, ~10M daily active users, and ~100K QPS for reads with DynamoDB and CDN scaling.
-- **Latency/Throughput Targets**: Target <50ms for paste retrieval, <200ms for creation, and ~2K pastes/sec ingestion.
+## Functional Requirements
+- **Posts**: Support text, images, videos, and links.
+- **Timelines**: Personalized feeds from followed users.
+- **Relationships**: Directional follow and unfollow actions.
+- **Interactions**: Like, comment, share, and react to posts.
+- **Search**: Search by keywords, hashtags, and mentions.
+- **Notifications**: Real-time alerts for interactions and mentions.
 
-### 6. Instagram
-**Improvements:**
-- **Media Storage**: Store images/videos in S3 with metadata (post_id, user_id, timestamp) in Cassandra for high write throughput.
-- **Feed Generation**: Use a hybrid push-pull model: push posts to active followers’ Redis timelines; pull for inactive users to reduce write load.
-- **Caching**: Cache feeds and media in Redis and CDN (Cloudflare) for low-latency delivery. Apply smart caching: aggressively cache popular media, use shorter TTLs for less-accessed content, and pre-warm caches for trending items.
-- **Sharding**: Shard posts by post_id and timelines by user_id using consistent hashing.
-- **low latency (< 500ms )**: To reduce write amplification from celebrities, we use a hybrid approach: fanout-on-write for users with <100K followers and fanout-on-read for celebrities (>100K followers). Celebrity posts go only to the Posts DB, not follower feeds. When a user fetches their feed, we merge precomputed posts (from Redis) with recent celebrity posts (from DB). This balances fast reads and scalable writes. Use Redis Cluster for data sharding across multiple nodes for durability
-- **Sort Chronologically**: To show a chronological feed of posts from followed users, query the Follow table (DynamoDB, with followerId as partition key, followedId as sort key) to get followed user IDs, then query the Post table (partition key: userId, sort key: createdAt+postId) for their recent posts. Combine, sort chronologically, and return posts to the client with cursor and limit, using indexes to avoid slow full table scans.
-- **Edge Cases**: Handle deleted posts (tombstone records), privacy settings (filter on read), viral content (cache hot posts), media corruption (validate uploads), and feed inconsistencies (recompute timelines).
-- **Monitoring**: Track feed latency, media load time, cache hit ratio, and post retrieval success rate.
-- **Trade-offs:**
-  - **Push vs. Pull**: Push ensures fast feeds but high write cost for influencers; pull is write-efficient but slower. Hybrid balances both for active users.
-  - **Cassandra vs. DynamoDB**: Cassandra handles high write throughput; DynamoDB is simpler but costlier. Choose Cassandra for write-heavy posts.
-  - **S3 vs. Custom Storage**: S3 is managed but costly; custom storage is cheaper but complex. Use S3 for reliability.
-- **Why Hybrid + Cassandra?**: Hybrid optimizes for active/inactive users, and Cassandra scales for frequent posts.
-- **Scalability Estimates**: Supports ~100M daily active users, ~1B posts/day, and ~50K QPS for feed retrieval with Cassandra and CDN scaling.
-- **Latency/Throughput Targets**: Target <200ms for feed generation, <100ms for media retrieval, and ~10K posts/sec ingestion.
+## Non-Functional Requirements
+- **Scalability**: Handle 100M daily active users (DAU), 1B posts/day, 50K QPS for timeline retrieval.
+- **Latency**: 
+  - Timeline generation: <200ms
+  - Post retrieval: <100ms
+  - Relationship queries: <50ms
+- **Availability**: 99.99% uptime with no single points of failure.
+- **Consistency**:
+  - Eventual consistency for posts and timelines.
+  - Strong consistency for relationships and notifications.
+## Improvements
+- **Posts Storage**:
+  - Use **Cassandra** with schema: `{post_id, user_id, content, timestamp, media_urls}`.
+  - Time-based partitioning (e.g., by day/week) for efficient range queries.
+  - Handles high write throughput (~12K posts/sec).
 
-### 7. Dropbox
-**Improvements:**
-- **File Storage**: Store files in S3 with metadata (file_id, user_id, version, path) in PostgreSQL for relational queries. Use presigned URLs to let clients upload files directly to Blob Storage, bypassing the backend for faster, cheaper uploads. The client requests a URL with file metadata (saved as "uploading"), uploads the file via PUT. Backend generates the URL, saves metadata as "uploading", and updates it to "uploaded" upon receiving a notification from Blob Storage post-upload. These URLs are generated with a specific expiration time, after which they become invalid, offering a secure way to share files without altering permissions.
-- **Downloading**: Use a CDN to cache files on global servers, serving them from the closest location to the user for reduced latency and faster downloads. Generate secure, time-limited URLs for users to download files from the CDN, similar to S3 presigned URLs.
-- **Sharing files**: Create a SharedFiles table linking userId to fileId to track shared files. To find a user's files, check this table for their userId. No need to manage a separate sharelist. Downside: searching the table is a bit slower than a direct lookup.
-- **Versioning**: Store file deltas in S3 to save space; maintain version history in DB.
-- **Syncing**: Use WebSockets for real-time sync notifications and Kafka for file change events or polling(if realtime not important).
-- **Make everything fast**: Speed up uploads, downloads, and syncing by using a CDN for low-latency downloads, chunking files for parallel uploads and selective syncing of changed chunks, and compressing files (using Gzip, Brotli, or Zstandard) based on file type, size, and network conditions. Compress before encrypting for better ratios, but skip compression for media files like images/videos with low compression gains.
-- **Support Large Files**: Support large files by chunking them into 5-10MB pieces for upload to S3, using client-side fingerprinting (SHA-256) for unique file and chunk identification. Track upload progress in a FileMetadata table with a chunks field, updated via S3 event notifications. Enable resumable uploads by checking uploaded chunks and use AWS Multipart Upload API for efficient handling. Show progress indicators for better user experience.
-- **Deduplication**: Compute file hashes to store identical files once, referencing via metadata.
-- **File Security:**: Ensure file security with HTTPS for encryption in transit, S3 encryption at rest using unique keys, and access control via a shareList or table. Use signed URLs with short expiration times (e.g., 5 minutes) for downloads, compatible with CDNs like CloudFront, to prevent unauthorized access even if links are shared.
-- **Edge Cases**: Handle concurrent edits (conflict resolution with versioning), large files (chunked uploads), offline access (local caching), file corruption (validate on upload), and storage quotas (enforce limits).
-- **Monitoring**: Track sync latency, storage usage, deduplication rate, and file upload success rate.
-- **Trade-offs:**
-  - **S3 vs. Custom Storage**: S3 is managed but costly; custom storage is cheaper but complex. Choose S3 for reliability and scalability.
-  - **PostgreSQL vs. NoSQL**: PostgreSQL excels for relational metadata; NoSQL is flexible but complex for joins. Choose PostgreSQL for file relationships.
-  - **WebSockets vs. Polling**: WebSockets are real-time but complex; polling is simpler but delayed. Choose WebSockets for UX.
-- **Why S3 + PostgreSQL?**: S3 ensures durable storage, and PostgreSQL handles complex metadata queries.
-- **Scalability Estimates**: Supports ~10M daily active users, ~1PB storage, and ~1K file uploads/sec with S3 and PostgreSQL scaling.
-- **Latency/Throughput Targets**: Target <500ms for file sync, <1s for uploads, and ~1K files/sec processing.
+- **Timelines**:
+  - **Hybrid Push-Pull Model**:
+    - **Push**: Store posts in **Redis** lists (`timeline:user_id`) for active users.
+    - **Pull**: Fetch on-demand for inactive users to reduce write load.
+  - Precompute posts from influencers to mitigate fanout issues.
+- **Relationships**:
+  - Store in **Redis** as adjacency lists (`followers:user_id`, `following:user_id`) for fast access (<50ms).
+  - Optionally use **Neo4j** for complex relationship queries (e.g., mutual follows).
+- **Denormalization**:
+  - Precompute timelines in Redis to avoid joins between user and post tables.
+  - Update timelines incrementally when new posts are created.
+- **Sharding**:
+  - Shard posts by `post_id` using consistent hashing in Cassandra.
+  - Shard timelines by `user_id` in Redis Cluster.
+- **Caching**:
+  - Cache hot posts and user profiles in Redis.
+  - Use CDN for media content delivery.
 
-### 8. YouTube or Netflix
-**Improvements:**
-- **Video Storage**: Store videos in S3 with metadata (video_id, title, uploader_id) in DynamoDB. Use HLS/DASH for adaptive streaming. Allow video uploads by storing metadata (name, description) in a scalable database like Cassandra, partitioned by videoId for efficient point lookups. Store video data in S3 using presigned URLs for direct, multi-part uploads. Post-process videos by splitting them into short, playable segments in multiple formats for efficient streaming, managed by a complex pipeline that stores segment references for downstream use.
-- **Video Watching**: Enable video watching with adaptive bitrate streaming: fetch VideoMetadata from the database, containing a URL to a manifest file in S3. The client downloads the manifest, selects video segments based on network conditions, and dynamically switches formats (e.g., lower resolution for slower networks) to ensure smooth playback. This relies on pre-segmented videos in multiple formats and a complex client-side logic.
-- **CDN**: Use Akamai/Cloudflare to cache videos globally, reducing origin load.
-- **Bitrate streaming**: Process videos for adaptive bitrate streaming by uploading the full video to S3, then using a DAG-based pipeline (orchestrated by tools like Temporal) to: split the video into segments with ffmpeg, transcode segments into multiple formats in parallel on worker nodes, generate audio/transcripts, and create manifest files referencing segments. Store segments and manifests in S3, using URLs to pass data between workers, and mark the upload as complete.
-- Support **resumable video** uploads by chunking the video into 5-10MB pieces with fingerprints, tracking chunk status in VideoMetadata. Upload chunks to S3, update status via S3 event notifications, and resume by skipping already-uploaded chunks based on VideoMetadata.
-- **Recommendation**: Compute personalized recommendations (collaborative filtering) via Spark jobs; cache in Redis.
-- **Sharding**: Shard video metadata by video_id; partition user data by user_id.
-- **Edge Cases**: Handle video buffering (pre-fetch chunks), geo-restrictions (IP-based filtering), high demand (scale CDN), video corruption (validate uploads), and recommendation staleness (periodic refresh).
-- **Monitoring**: Track streaming latency, recommendation click-through rate, CDN hit ratio, and video playback success rate.
-- **Trade-offs:**
-  - **Pre-compute vs. Real-time Recs**: Pre-compute is efficient but stale; real-time is fresh but compute-heavy. Choose pre-compute with periodic updates.
-  - **DynamoDB vs. Cassandra**: DynamoDB is simpler but costlier; Cassandra scales better for writes. Choose DynamoDB for ease of use.
-  - **S3 vs. Custom Storage**: S3 is reliable but costly; custom storage is cheaper but complex. Use S3 for durability.
-- **Why S3 + CDN?**: S3 provides durable storage, and CDN ensures low-latency video delivery.
-- **Scalability Estimates**: Supports ~1B daily active users, ~10PB storage, and ~100K QPS for streaming with S3 and CDN scaling.
-- **Latency/Throughput Targets**: Target <200ms for video start, <500ms for recommendations, and ~50K streams/sec.
+- **Edge Cases**:
+  - **Deleted Posts**: Use tombstones in Cassandra.
+  - **Privacy Settings**: Filter content on read.
+  - **Viral Posts**: Implement multi-level caching (Redis + Memcached).
+  - **User Bans**: Maintain a banned list in Redis and check on read.
+  - **Timeline Staleness**: Periodically refresh or pull for inactive users.
 
-### 9. Yelp or Nearby Friends
-**Improvements:**
-- **Geospatial Index**: Use Redis Geo or PostgreSQL PostGIS to store and query locations (business_id, lat, lon).
-- **Search**: Index business metadata in Elasticsearch for fast text and geo-based searches.
-- **Caching**: Cache popular searches and nearby results in Redis (TTL-based eviction).
-- **Edge Cases**: Handle location spoofing (IP validation), stale data (periodic refresh), high QPS (load balancing), privacy settings (filter results), and inaccurate coordinates (validate inputs).
-- Efficiently calculate and update business average **ratings** by storing a precomputed average in the business record, updated incrementally with each new review using a formula (e.g., (old_avg * old_count + new_rating) / (old_count + 1)). Avoid on-the-fly calculations or complex message queues, as the low write volume (~1 write/second for 100M users) is easily handled by modern databases.
-- Enforce a **one-review-per-business** constraint by adding a unique composite key or index on userId and businessId in the reviews table at the database level (e.g., using a unique constraint in PostgreSQL or DynamoDB). This prevents duplicate reviews, ensures consistency at the persistence layer, and avoids complex application-layer checks.
-- To efficiently handle **complex search queries**, use **quadtree indexing** for geospatial searches to avoid slow full-table scans on latitude/longitude. First, filter by distance using the Haversine formula (determines the great-circle distance between two points on a sphere given their longitudes and latitudes) to shrink the result set, then apply filters like name or category. Prioritize distance filtering to quickly reduce the search space for faster, scalable searches.
-- To **search by predefined location names** like cities or neighborhoods, create a locations table mapping names (e.g., "San Francisco", "Mission") to polygons from datasets like GeoJSON, indexed for fast lookups. Pre-compute and store location identifiers (e.g., "san_francisco", "mission_district") in each business’s record using an inverted index (e.g., Elasticsearch keyword field). Query the locations table to get the polygon, then filter businesses by matching pre-computed location identifiers, avoiding costly per-request polygon checks.
-- **Monitoring**: Track search latency, geo-query accuracy, cache hit ratio, and search success rate.
-- **Trade-offs:**
-  - **Redis Geo vs. PostGIS**: Redis is faster for simple queries; PostGIS handles complex geospatial ops. Choose Redis for low-latency lookups.
-  - **Elasticsearch vs. DB**: Elasticsearch is optimized for search; DB is durable but slower. Use Elasticsearch for fast queries.
-  - **Caching vs. No Caching**: Caching reduces latency but risks staleness; no caching is fresh but slower. Use caching with TTL for balance.
-- **Why Redis + Elasticsearch?**: Redis ensures fast geo-queries, and Elasticsearch handles complex searches.
-- **Scalability Estimates**: Supports ~10M daily active users, ~100K QPS for searches, and ~1M businesses with Redis and Elasticsearch scaling.
-- **Latency/Throughput Targets**: Target <100ms for geo-queries, <200ms for search results, and ~5K searches/sec.
+- **Monitoring**:
+  - Track timeline latency, fanout throughput, graph query performance, post retrieval success rate.
+  - Monitor Redis memory usage, Cassandra write throughput, and CDN hit rates.
 
-## Write-Heavy Systems
-These prioritize high throughput, durability, and ingestion speed.
+## Trade-offs
+- **Push vs. Pull for Timelines**:
+  - **Push**: Low read latency but high write cost for users with many followers (influencers).
+  - **Pull**: Write-efficient but slower for reads.
+  - **Hybrid Model**: Balances both by pushing to active users and pulling for inactive ones.
+- **Graph DB vs. Adjacency Lists**:
+  - **Neo4j**: Flexible for complex queries but slower.
+  - **Redis Adjacency Lists**: Faster for simple follow lookups.
+  - **Choice**: Use Redis for low-latency timeline generation; Neo4j for advanced queries if needed.
+- **Cassandra vs. DynamoDB**:
+  - **Cassandra**: Better for high write throughput and open-source.
+  - **DynamoDB**: Simpler to manage but more expensive.
+  - **Choice**: Cassandra for write-heavy post storage.
 
-### 10. Rate Limiter
-**Improvements:**
-- **Algorithm**: Use token bucket for flexibility (allows bursts) over leaky bucket (fixed rate). Store tokens in Redis with {user_id, tokens, last_refill_timestamp}.
-- **TTL Logic**: Set Redis TTL to bucket refresh interval (e.g., 1 minute) to auto-expire stale counters.
-- **Distributed**: Use Redis cluster for scalability and Lua scripts for atomic updates to avoid race conditions. Each host has a Token Bucket. Requests for same client can hit different hosts. Hosts must communicate token consumption.
-- **Negative Tokens:** In distributed systems, request bursts from a single client can be routed to different servers, potentially exceeding the intended rate limit. To address this, servers allow token buckets to have temporary negative balances. This ensures that throttling occurs for a sufficient period after the burst, effectively compensating for the initial excess and maintaining the overall rate limit.
-- **Inter-Host Communication:** To enforce rate limits across a distributed system, servers must share information about client request counts. This can be achieved through methods like full-mesh communication (simple but not scalable), a more scalable gossip protocol, or a shared cache. Alternatively, a coordination service can elect a leader to manage the rate calculations. When considering how servers communicate, factors like reliability and speed must be balanced, often leading to a choice between TCP and UDP protocols.
-- **Memory Management:** Storing token buckets for every client can consume significant memory. To optimize this, buckets for inactive clients can be removed after a defined timeout period. When an inactive client sends a new request, a fresh token bucket is then created. This approach prevents the system from being burdened with excessive storage for clients that are not actively using the service.
-- **Rule Management:** Service teams require a tool to define and manage rate-limiting rules, specifying limits for various clients or API endpoints. This tool should provide functionality to create, update, and delete these rules, which are typically stored in a database. The rate-limiting system then retrieves and enforces these rules from the database.
-- **Edge Cases**: Handle clock skew (use monotonic clocks), bursty traffic (adjust bucket size), DDoS attacks (global rate limits), token exhaustion (queue requests), and misconfigured limits (audit logs).
-- **Monitoring**: Track rejection rate, token refill latency, Redis throughput, and rate limit accuracy.
-- **Trade-offs:**
-  - **Token vs. Leaky Bucket**: Token bucket allows bursts, suitable for APIs; leaky bucket enforces strict rates, better for hardware. Choose token bucket for API flexibility.
-  - **Redis vs. In-Memory**: Redis is durable and distributed; in-memory is faster but volatile. Choose Redis for reliability.
-  - **Global vs. Per-User Limits**: Global limits prevent abuse but are coarse; per-user limits are precise but complex. Use both for comprehensive control.
-- **Why Token Bucket + Redis?**: Token bucket handles bursts gracefully, and Redis scales for distributed systems.
-- **Scalability Estimates**: Supports ~100K QPS for rate checks, ~1M users, and ~10K limits/sec with Redis cluster scaling.
-- **Latency/Throughput Targets**: Target <10ms for rate checks, ~50K checks/sec, and <50ms for token refills.
+## Why Hybrid + Cassandra?
+- **Hybrid Model**: Optimizes for both influencers (push for low latency) and inactive users (pull to save writes).
+- **Cassandra**: Scales horizontally for high write throughput, essential for handling 1B posts/day.
+## Scalability Estimates
+- Supports 100M DAU, 1B posts/day (~12K posts/sec), and 50K QPS for timeline retrieval.
+- Achieved through Cassandra clusters for posts and Redis sharding for timelines.
+## Latency/Throughput Targets
+- **Timeline Generation**: <200ms (leveraging Redis precomputing).
+- **Post Retrieval**: <100ms (via Cassandra indexing).
+- **Relationship Queries**: <50ms (using Redis).
+- **Post Ingestion**: ~10K posts/sec.
 
-### 11. Log Collection and Analysis System
-**Improvements:**
-- **Ingestion**: Use Kafka for high-throughput log ingestion with topic partitioning by source or timestamp.
-- **Processing**: Use ELK stack (Elasticsearch for storage, Logstash for parsing, Kibana for visualization). Add Spark for batch analytics.
-- **Buffering**: Buffer logs in Kafka to handle spikes; use consumer groups for parallel processing.
-- **Real-time Querying**: Index logs in Elasticsearch with time-based indices for fast searches.
-- **Edge Cases**: Handle log spikes (scale Kafka partitions), malformed logs (validate before ingestion), data retention (TTL policies), consumer lag (scale workers), and log duplication (idempotency keys).
-- **Monitoring**: Track ingestion latency, query response time, partition lag, and log processing success rate.
-- **Trade-offs:**
-  - **Kafka vs. RabbitMQ**: Kafka is better for high-throughput logs; RabbitMQ is simpler but less scalable. Choose Kafka for durability and partitioning.
-  - **Elasticsearch vs. ClickHouse**: Elasticsearch is flexible for text search; ClickHouse is faster for analytics. Choose Elasticsearch for general-purpose querying.
-  - **Real-time vs. Batch Processing**: Real-time is fast but resource-heavy; batch is efficient but delayed. Use both for balance.
-- **Why Kafka + ELK?**: Kafka ensures reliable ingestion, and ELK provides robust search and visualization.
-- **Scalability Estimates**: Handles ~1M logs/sec, ~1PB storage, and ~10K QPS for queries with Kafka and Elasticsearch scaling.
-- **Latency/Throughput Targets**: Target <100ms for log ingestion, <500ms for queries, and ~100K logs/sec processing.
+## Database Schemas
+- **Cassandra Posts Table**:
+  ```sql
+  CREATE TABLE posts (
+    post_id UUID,
+    user_id UUID,
+    content TEXT,
+    timestamp TIMESTAMP,
+    media_urls LIST<TEXT>,
+    PRIMARY KEY (user_id, timestamp, post_id)
+  ) WITH CLUSTERING ORDER BY (timestamp DESC);
+  ```
+  - Partitioned by `user_id`, clustered by `timestamp` for time-based queries.
+  - **Consistency**: Tunable (e.g., quorum reads/writes) for high availability.
+- **Redis Timelines**:
+  - Stored as sorted sets: `timeline:user_id` with post_ids ordered by timestamp.
+  - **Consistency**: Eventual.
+- **Redis Relationships**:
+  - Sets: `followers:user_id` and `following:user_id`.
+  - **Consistency**: Strong via Redis transactions or Lua scripts.
+
+## Cache Schemas
+- **Post Cache**: `post:post_id` – serialized post object (eventual consistency).
+- **User Cache**: `user:user_id` – serialized user profile (eventual consistency).
+- **Hot Posts**: `hot_posts` – sorted set by engagement scores (eventual consistency).
+
+## Consistency vs. Availability
+- **Database (Cassandra)**:
+  - Eventual consistency for posts and timelines (prioritizes availability).
+  - Uses quorum reads/writes for balance.
+- **Cache (Redis)**:
+  - Eventual consistency for timelines and caches.
+  - Strong consistency for relationships via atomic operations.
+- **Tricks**:
+  - Use Redis pipelining for batch writes.
+  - Leverage Cassandra lightweight transactions for critical updates.
+
+## Additional Considerations
+- **Search**: Use **Elasticsearch** for full-text search (keywords, hashtags, mentions).
+- **Notifications**: 
+  - Queue with **Kafka**.
+  - Deliver via WebSocket or APNs for real-time updates.
+- **Media Storage**: Store in **S3**, serve via CDN.
+- **Rate Limiting**: Implement caps on API requests and post creations.
+- **Data Archiving**: Move old posts to **Glacier** for cost-effective storage.
+
+---
+
+# NewsFeed System Design
+
+## Overview
+This design outlines a scalable NewsFeed system capable of handling 50M daily active users (DAU), 500M posts per day, and 20K queries per second (QPS) for feed generation. It incorporates a hybrid push/pull model, efficient caching, and optimized ranking to meet latency and throughput targets.
+
+## Functional Requirements
+- **Feed Generation**: Generate personalized feeds based on posts from followed accounts.
+- **Post Interactions**: Enable users to like, comment, and share posts.
+- **Ranking**: Order posts by relevance using likes, recency, and user affinity.
+- **Pagination**: Provide efficient scrolling with cursor-based pagination.
+- **High-Follower Accounts**: Manage users with many followers (e.g., celebrities) without system overload.
+
+## Non-Functional Requirements
+- **Scalability**: Support 50M DAU, 500M posts/day, and 20K QPS.
+- **Latency**:
+  - Feed retrieval: <150ms
+  - Ranking updates: <500ms
+  - Feed generation: ~5K feeds/sec
+- **Availability**: Ensure high availability with minimal downtime.
+- **Consistency**: Use eventual consistency for feed content, addressing staleness.
+
+## Design Improvements
+
+### Push vs. Pull (Fanout-on-Write vs. Fanout-on-Read)
+- **Fanout-on-Write**: For active users, push posts to Redis timelines immediately for fast retrieval.
+- **Fanout-on-Read**: For inactive users, fetch posts on demand to reduce write load.
+- **Hybrid Approach**: Combines both to balance latency and resource usage.
+- **High-Follower Accounts**: 
+  - Add a `precompute_flag` in the Follow table to skip precomputing feeds for accounts like Justin Bieber (90M+ followers).
+  - In the async worker queue, ignore precompute requests for flagged accounts.
+  - On read, merge partially precomputed feeds with recent posts from non-precomputed accounts.
+
+### Caching
+- **Redis**: Cache recent posts for quick access (e.g., `recent_posts:user_id` as a list).
+- **Memcached**: Store full timelines to reduce database load (e.g., `timeline:user_id` as serialized data).
+- **Multi-Level Caching**: Use both to handle hot content efficiently.
+
+### Pagination
+- Implement cursor-based pagination using a combination of `timestamp` and `post_id` for seamless scrolling.
+
+### Ranking
+- Use a weighted scoring algorithm based on:
+  - Likes
+  - Recency
+  - User affinity
+- Compute scores in a background job using Spark, then store in Redis (e.g., `ranked_feed:user_id` as a sorted set).
+
+### Handling Edge Cases
+- **Feed Staleness**: Periodically refresh feeds for inactive users.
+- **Deleted Posts**: Remove from cache and exclude during feed generation.
+- **Skewed User Activity**: Rate-limit influencers to prevent overload.
+- **Privacy Filters**: Apply filters at read time based on user settings.
+- **Cache Inconsistencies**: Revalidate cache with the database periodically.
+
+### Monitoring
+- Track key metrics:
+  - Feed refresh latency
+  - Ranking accuracy
+  - Cache eviction rate
+  - Feed generation success rate
+
+## Trade-offs
+
+### Fanout-on-Write vs. Fanout-on-Read
+- **Fanout-on-Write**: 
+  - Pros: Faster feed retrieval for active users.
+  - Cons: Expensive for users with many followers.
+- **Fanout-on-Read**: 
+  - Pros: Write-efficient.
+  - Cons: Slower reads.
+- **Chosen Approach**: Hybrid model to optimize latency and cost.
+
+### Real-time vs. Batch Ranking
+- **Real-time Ranking**: 
+  - Pros: Always fresh.
+  - Cons: Computationally expensive.
+- **Batch Ranking**: 
+  - Pros: Efficient and scalable.
+  - Cons: May be stale.
+- **Chosen Approach**: Batch ranking with periodic updates for scalability.
+
+### Redis vs. Memcached
+- **Redis**: 
+  - Pros: Supports complex data structures (e.g., sorted sets).
+  - Cons: Heavier footprint.
+- **Memcached**: 
+  - Pros: Lightweight and simple.
+  - Cons: Limited functionality.
+- **Chosen Approach**: Use both for complementary caching needs.
+
+## Why Hybrid + Redis?
+- **Hybrid Model**: Minimizes write amplification for inactive users while ensuring low-latency reads for active users.
+- **Redis**: Provides fast access to precomputed timelines and recent posts, critical for meeting the <150ms feed retrieval target.
+
+## Scalability Estimates
+- **Capacity**: Handles 50M DAU, 500M posts/day, and 20K QPS.
+- **How**: Achieved through Redis and Memcached scaling, plus database partitioning.
+
+## Latency and Throughput Targets
+- **Feed Retrieval**: <150ms
+- **Ranking Updates**: <500ms
+- **Feed Generation**: ~5K feeds/sec
+
+## Database Schemas
+- **Posts Table** (e.g., Cassandra):
+  - Schema: `{post_id, user_id, content, timestamp, media_urls}`
+  - Partitioned by `user_id`, clustered by `timestamp DESC`.
+- **Follow Table**:
+  - Schema: `{follower_id, followee_id, precompute_flag}`
+  - `precompute_flag` skips feed precomputation for high-follower accounts.
+- **Feed Table** (precomputed feeds):
+  - Schema: `{user_id, post_id, score, timestamp}`
+
+## Cache Schemas
+- **Redis**:
+  - `recent_posts:user_id`: List of recent post IDs.
+  - `ranked_feed:user_id`: Sorted set of post IDs by score.
+- **Memcached**:
+  - `timeline:user_id`: Serialized list of post IDs.
+
+## Additional Considerations
+- **Background Jobs**: Use Spark for batch ranking computation.
+- **Async Worker Queue**: Efficiently manage feed precomputing, skipping high-follower accounts.
+- **Rate Limiting**: Cap activity from high-traffic users to prevent abuse.
+
+## Conclusion
+This NewsFeed system uses a hybrid fanout model with Redis and Memcached caching to balance performance and scalability. It efficiently handles high-follower accounts by merging posts on read, computes rankings in batch for efficiency, and addresses edge cases with targeted strategies, meeting all specified targets.
+
+---
+
+# Pastebin System Design
+
+## Functional Requirements
+- **Paste Creation**: Users create text pastes (text, code, markdown) with optional expiration.
+- **Paste Sharing**: Generate short URLs for sharing public/private pastes.
+- **Paste Access**: Retrieve pastes via unique URLs; support private access with authentication.
+- **Expiration**: Auto-delete pastes after a set time (e.g., 1 day, 1 week).
+- **Syntax Highlighting**: Display code with language-specific formatting.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~1K paste creations/sec, ~10M daily active users, ~100K read QPS.
+- **Latency**: <50ms for paste retrieval, <200ms for creation, ~2K pastes/sec ingestion.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for paste content, strong for metadata (e.g., paste_id, expiration).
+- **Security**: Prevent malicious content, secure private pastes.
+
+## Improvements
+- **Text Storage**: Store metadata in **DynamoDB** {`paste_id`, `content`, `creation_time`, `expiration_time`, `user_id`, `is_private`}. Use **S3** for large pastes (>1MB) with S3 object key linked in DynamoDB.
+- **Key Generation**: Generate short **base62** IDs (6-8 chars, ~62^6 URLs) via **ZooKeeper** distributed counter for uniqueness. Alternative: hash content with collision checks.
+- **Caching**: Cache hot pastes in **Redis** (LRU eviction) and serve via **Cloudflare CDN** for global access.
+- **Expiration**: Set **TTL** in Redis/DynamoDB for auto-deletion. Use S3 lifecycle policies for large pastes.
+- **Access Control**: Public pastes accessible via URL; private pastes use **signed URLs** with short-lived tokens.
+- **Edge Cases**: 
+  - **Duplicate Pastes**: Hash-based deduplication using content SHA-256.
+  - **Malicious Content**: Apply content filters (e.g., regex for XSS, malware signatures).
+  - **High Read QPS**: CDN handles ~100K QPS; Redis for low-latency hot reads.
+  - **Large Pastes**: Multipart uploads to S3 for reliability.
+  - **Expired Paste Revival**: Archive to **Glacier** with user-triggered restore option.
+- **Monitoring**: Track paste creation rate, cache hit ratio, expiration cleanup success, retrieval latency, CDN hit rate, DynamoDB read/write capacity.
+
+## Trade-offs
+- **Counter vs. Hashing**: 
+  - **Counter**: Unique IDs, coordination overhead. 
+  - **Hashing**: No coordination, collision risk. 
+  - *Choice*: **ZooKeeper counter** for guaranteed uniqueness.
+- **NoSQL vs. S3**: 
+  - **DynamoDB**: Fast metadata access, costly for blobs. 
+  - **S3**: Scalable for large data, slower metadata. 
+  - *Choice*: DynamoDB for metadata, S3 for large content.
+- **Redis vs. CDN**: 
+  - **Redis**: Fast for hot data, memory-bound. 
+  - **CDN**: Global scaling, static content only. 
+  - *Choice*: Both for complementary performance.
+
+## Why Counter + DynamoDB/S3?
+- **Counter**: Ensures unique, short IDs without collision risks.
+- **DynamoDB**: Low-latency metadata access for paste lookups.
+- **S3**: Cost-effective, scalable storage for large pastes.
+
+## Scalability Estimates
+- **Creations**: ~1K pastes/sec via DynamoDB partitioning, ZooKeeper scaling.
+- **Users**: ~10M DAU with Redis/CDN caching.
+- **Reads**: ~100K QPS via CDN, Redis for hot pastes.
+
+## Latency/Throughput Targets
+- **Retrieval**: <50ms (Redis/CDN).
+- **Creation**: <200ms (DynamoDB/ZooKeeper).
+- **Ingestion**: ~2K pastes/sec.
+
+## Database Schemas
+- **DynamoDB Pastes Table**:
+  ```sql
+  Table: pastes
+  Partition Key: paste_id (String)
+  Attributes:
+    content (String, small pastes only)
+    s3_key (String, for large pastes)
+    creation_time (Number, epoch ms)
+    expiration_time (Number, epoch ms)
+    user_id (String, optional)
+    is_private (Boolean)
+  ```
+  - **Consistency**: Strong for metadata (paste_id, expiration_time) via consistent reads; eventual for content.
+  - **Availability**: High with DynamoDB multi-AZ replication.
+
+- **S3 Large Pastes**:
+  - Bucket: `pastebin-content`, key: `paste_id/timestamp`.
+  - Lifecycle policy: Delete after `expiration_time`.
+
+## Cache Schemas
+- **Redis**:
+  - `paste:paste_id`: Serialized paste object (content, metadata).
+  - **TTL**: Matches `expiration_time`.
+  - **Consistency**: Eventual, sync with DynamoDB on miss.
+- **CDN (Cloudflare)**:
+  - Cache public pastes by URL (`/paste_id`).
+  - **Consistency**: Eventual, purge on update/delete.
+- **Tricks**: Redis pipelining for batch reads, CDN edge caching for static content.
+
+## Consistency vs. Availability
+- **DynamoDB**:
+  - **Strong Consistency**: For paste_id, expiration_time to ensure accurate access/expiration.
+  - **High Availability**: Multi-AZ, tunable consistency (quorum for writes).
+- **Redis**:
+  - **Eventual Consistency**: For cached pastes, refreshed on miss.
+  - **High Availability**: Redis Cluster with replicas.
+- **CDN**:
+  - **Eventual Consistency**: Cache invalidation on paste updates/deletion.
+  - **High Availability**: Global edge nodes.
+- **Tricks**: Use DynamoDB conditional writes for metadata updates, Redis Lua scripts for atomic cache updates.
+
+## Additional Considerations
+- **Syntax Highlighting**: Use **Prism.js** or server-side rendering for code formatting.
+- **Rate Limiting**: Cap paste creation/reads per user to prevent abuse.
+- **Analytics**: Track paste views with **Kafka** and store in **Redshift** for insights.
+- **Security**: Encrypt private pastes in S3 with KMS, validate input to block XSS/SQL injection.
+- **Backup**: Periodic DynamoDB backups to S3, Glacier for long-term storage.
+
+## Correctness Check
+- **Original Design**: All components (DynamoDB, S3, ZooKeeper, Redis, CDN) align with scalability/latency goals. No incorrect details found.
+- **Missing Details**: Added functional/non-functional requirements, detailed schemas, consistency/availability, and analytics/security for completeness.
+
+## Summary
+Pastebin uses **ZooKeeper** for unique base62 IDs, **DynamoDB** for metadata, **S3** for large pastes, **Redis/CDN** for caching, and **TTL** for expiration. It handles 10M DAU, 1K creations/sec, 100K read QPS with <50ms retrieval, <200ms creation, and robust edge case handling (duplicates, malicious content, large pastes). Security, analytics, and syntax highlighting ensure a FAANG-ready design.
+
+
+---
+
+
+# Instagram System Design
+
+## Functional Requirements
+- **Media Posting**: Upload images/videos with captions, tags, and locations.
+- **Feed Generation**: Display chronological feeds of posts from followed users.
+- **Follow System**: Enable follow/unfollow for directional relationships.
+- **Interactions**: Support likes, comments, and shares.
+- **Explore/Search**: Discover trending content, search by hashtags/users.
+- **Stories**: Share ephemeral content (24-hour lifespan).
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~100M daily active users (DAU), ~1B posts/day, ~50K QPS for feed retrieval.
+- **Latency**: <200ms for feed generation, <100ms for media retrieval, ~10K posts/sec ingestion.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for feeds/posts, strong for relationships/interactions.
+- **Security**: Secure private posts, prevent malicious uploads.
+
+## Improvements
+- **Media Storage**: Store images/videos in **S3** with metadata {`post_id`, `user_id`, `timestamp`, `caption`, `tags`, `location`} in **Cassandra** for high write throughput (~12K posts/sec). Use S3 lifecycle policies for archiving.
+- **Feed Generation**: 
+  - **Hybrid Push-Pull Model**: 
+    - **Push**: Fanout posts to **Redis** timelines (`timeline:user_id`) for active users (<100K followers).
+    - **Pull**: Fetch on-demand for inactive users or celebrities (>100K followers) to reduce write load.
+  - **Celebrity Optimization**: Store celebrity posts in **Cassandra Posts DB** without fanout. Merge with precomputed feeds on read.
+  - **Chronological Sorting**: Query **DynamoDB Follow Table** (partition: `followerId`, sort: `followedId`) for followed users, then **Cassandra Post Table** (partition: `userId`, sort: `createdAt+postId`) for recent posts. Combine, sort by timestamp, return with cursor/limit.
+- **Caching**: 
+  - **Redis**: Cache feeds (`timeline:user_id`, sorted set) and hot posts (`post:post_id`).
+  - **Cloudflare CDN**: Cache media for global delivery.
+  - **Smart Caching**: Aggressive caching for popular media, shorter TTLs for less-accessed content, pre-warm caches for trending items.
+- **Sharding**: Shard posts by `post_id` (Cassandra) and timelines by `user_id` (Redis Cluster) using **consistent hashing**. Redis Cluster ensures durability across nodes.
+- **Edge Cases**: 
+  - **Deleted Posts**: Tombstone records in Cassandra.
+  - **Privacy Settings**: Filter on read based on `is_private` flag.
+  - **Viral Content**: Cache hot posts in Redis/Memcached.
+  - **Media Corruption**: Validate uploads (format, size, checksum).
+  - **Feed Inconsistencies**: Recompute timelines periodically or on cache miss.
+- **Monitoring**: Track feed latency, media load time, cache hit ratio, post retrieval success rate, Redis memory usage, Cassandra write throughput, CDN hit rates.
+
+## Trade-offs
+- **Push vs. Pull**: 
+  - **Push**: Fast feeds, high write cost for influencers. 
+  - **Pull**: Write-efficient, slower reads. 
+  - *Choice*: **Hybrid** for active users/celebrities.
+- **Cassandra vs. DynamoDB**: 
+  - **Cassandra**: High write throughput, complex setup. 
+  - **DynamoDB**: Simpler, costlier. 
+  - *Choice*: **Cassandra** for write-heavy posts.
+- **S3 vs. Custom Storage**: 
+  - **S3**: Managed, reliable, costly. 
+  - **Custom**: Cheaper, complex. 
+  - *Choice*: **S3** for reliability.
+
+## Why Hybrid + Cassandra?
+- **Hybrid**: Balances write amplification (celebrities) and read latency (active users).
+- **Cassandra**: Scales horizontally for ~1B posts/day with low-latency writes.
+
+## Scalability Estimates
+- **Users**: ~100M DAU via Cassandra clusters, Redis sharding.
+- **Posts**: ~1B/day (~12K posts/sec).
+- **Reads**: ~50K QPS with CDN/Redis.
+
+## Latency/Throughput Targets
+- **Feed Generation**: <200ms (Redis precompute, Cassandra indexing).
+- **Media Retrieval**: <100ms (CDN/S3).
+- **Post Ingestion**: ~10K posts/sec.
+
+## Database Schemas
+- **Cassandra Posts Table**:
+  ```sql
+  CREATE TABLE posts (
+    user_id UUID,
+    post_id UUID,
+    created_at TIMESTAMP,
+    caption TEXT,
+    tags LIST<TEXT>,
+    location TEXT,
+    s3_key TEXT,
+    is_private BOOLEAN,
+    PRIMARY KEY (user_id, created_at, post_id)
+  ) WITH CLUSTERING ORDER BY (created_at DESC);
+  ```
+  - Partition: `user_id`, cluster: `created_at+post_id`.
+  - **Consistency**: Eventual (quorum writes), high availability.
+- **DynamoDB Follow Table**:
+  ```sql
+  Table: follows
+  Partition Key: followerId (String)
+  Sort Key: followedId (String)
+  Attributes: created_at (Number)
+  ```
+  - **Consistency**: Strong for relationship updates, high availability.
+- **Redis Timelines**:
+  - `timeline:user_id`: Sorted set of `post_id` by timestamp.
+  - **Consistency**: Eventual, refreshed on miss.
+
+## Cache Schemas
+- **Redis**:
+  - `post:post_id`: Serialized post (metadata, s3_key).
+  - `timeline:user_id`: Sorted set (post_ids, timestamps).
+  - **Consistency**: Eventual, sync with Cassandra.
+  - **TTL**: Short for cold content, long for hot.
+- **CDN (Cloudflare)**:
+  - Cache media by `s3_key`.
+  - **Consistency**: Eventual, purge on update/delete.
+- **Tricks**: Redis pipelining for batch writes, CDN pre-warming for trending media.
+
+## Consistency vs. Availability
+- **Cassandra**: 
+  - **Eventual Consistency**: For posts (quorum reads/writes).
+  - **High Availability**: Multi-region replication.
+- **DynamoDB**: 
+  - **Strong Consistency**: For follow relationships (conditional writes).
+  - **High Availability**: Global tables.
+- **Redis**: 
+  - **Eventual Consistency**: For timelines, sync on miss.
+  - **High Availability**: Redis Cluster with replicas.
+- **CDN**: 
+  - **Eventual Consistency**: Cache invalidation on updates.
+  - **High Availability**: Global edge nodes.
+- **Tricks**: Cassandra lightweight transactions for critical updates, Redis Lua scripts for atomic operations.
+
+## Additional Considerations
+- **Stories**: Store in **Redis** with 24-hour TTL, fanout to followers.
+- **Search/Explore**: Use **Elasticsearch** for hashtags, users, locations.
+- **Notifications**: **Kafka** queue, WebSocket/APNs for real-time delivery.
+- **Rate Limiting**: Cap post uploads/interactions per user.
+- **Security**: Encrypt private media in S3 with KMS, validate uploads for malware.
+- **Analytics**: Log interactions in **Kafka**, aggregate in **Redshift**.
+
+## Correctness Check
+- **Original Design**: All components (S3, Cassandra, Redis, CDN, DynamoDB) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added stories, search, notifications, security, analytics, and detailed schemas for completeness.
+
+## Summary
+Instagram’s design uses a **hybrid push-pull model** with **Cassandra** for posts, **S3** for media, **Redis** for timelines, and **CDN** for delivery. It optimizes celebrities with pull-based feeds, ensures chronological sorting, and handles edge cases (privacy, viral content). Scales to 100M DAU, 1B posts/day, 50K QPS with <200ms feed latency, 99.99% uptime, and robust security/analytics.
+
+---
+
+
+# Dropbox System Design
+
+## Functional Requirements
+- **File Upload/Download**: Upload/download files of any type/size with progress tracking.
+- **File Sharing**: Share files with specific users via secure links.
+- **Versioning**: Maintain file version history with conflict resolution.
+- **Syncing**: Real-time sync across devices.
+- **Offline Access**: Cache files locally for offline use.
+- **Deduplication**: Store identical files once to save space.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~10M daily active users (DAU), ~1PB storage, ~1K file uploads/sec.
+- **Latency**: <500ms for file sync, <1s for uploads, ~1K files/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for file content, strong for metadata (e.g., file_id, version).
+- **Security**: Encrypt files in transit/rest, secure sharing with access control.
+
+## Improvements
+- **File Storage**: 
+  - Store files in **S3** with metadata {`file_id`, `user_id`, `version`, `path`, `hash`, `status`} in **PostgreSQL** for relational queries.
+  - Use **presigned URLs** for direct S3 uploads, bypassing backend. Client requests URL with metadata (`status: uploading`), uploads via PUT, backend updates to `uploaded` on S3 notification. URLs expire (e.g., 5min) for security.
+- **Downloading**: 
+  - Use **CloudFront CDN** to cache files globally, serving from nearest edge for low latency.
+  - Generate **signed URLs** (5min expiry) for secure downloads, compatible with CDN.
+- **Sharing Files**: 
+  - **SharedFiles Table** in PostgreSQL links `user_id` to `file_id`. Query by `user_id` to list shared files.
+  - Downside: Table scans slower than direct lookup but simpler than separate sharelist.
+- **Versioning**: Store deltas in S3 for space efficiency; track versions in PostgreSQL (`version_history` table).
+- **Syncing**: 
+  - **WebSockets** for real-time sync notifications.
+  - **Kafka** for file change events, fallback to polling for non-real-time clients.
+- **Performance Optimization**: 
+  - **CDN**: Low-latency downloads.
+  - **Chunking**: Split files into 5-10MB chunks for parallel uploads, selective syncing.
+  - **Compression**: Use **Gzip/Brotli** for text, skip for media (low compression gains). Compress before encryption.
+- **Large Files**: 
+  - Chunk into 5-10MB pieces, upload to S3 via **Multipart Upload API**.
+  - Client-side **SHA-256** fingerprinting for file/chunk IDs.
+  - Track progress in **FileMetadata Table** (`chunks` field), updated via S3 events.
+  - Support resumable uploads by checking uploaded chunks.
+- **Deduplication**: Compute **SHA-256** hashes, store identical files once, reference via metadata.
+- **File Security**: 
+  - **HTTPS** for transit encryption.
+  - **S3 encryption** at rest with unique KMS keys.
+  - Access control via **SharedFiles Table**, signed URLs for downloads.
+- **Edge Cases**: 
+  - **Concurrent Edits**: Resolve conflicts via versioning (e.g., create `file_v2`).
+  - **Large Files**: Chunked uploads for reliability.
+  - **Offline Access**: Local caching with sync on reconnect.
+  - **File Corruption**: Validate uploads with checksums.
+  - **Storage Quotas**: Enforce limits in PostgreSQL, reject uploads if exceeded.
+- **Monitoring**: Track sync latency, storage usage, deduplication rate, upload success rate, CDN hit ratio, PostgreSQL query performance.
+
+## Trade-offs
+- **S3 vs. Custom Storage**: 
+  - **S3**: Managed, reliable, costly. 
+  - **Custom**: Cheaper, complex. 
+  - *Choice*: **S3** for scalability.
+- **PostgreSQL vs. NoSQL**: 
+  - **PostgreSQL**: Strong for relational metadata, complex joins. 
+  - **NoSQL**: Flexible, weak for joins. 
+  - *Choice*: **PostgreSQL** for file relationships.
+- **WebSockets vs. Polling**: 
+  - **WebSockets**: Real-time, complex. 
+  - **Polling**: Simpler, delayed. 
+  - *Choice*: **WebSockets** for better UX.
+
+## Why S3 + PostgreSQL?
+- **S3**: Durable, scalable storage for files.
+- **PostgreSQL**: Efficient relational queries for metadata, versioning, sharing.
+
+## Scalability Estimates
+- **Users**: ~10M DAU via S3 partitioning, PostgreSQL sharding.
+- **Storage**: ~1PB with S3 scaling, deduplication.
+- **Uploads**: ~1K files/sec with Multipart Upload, CDN.
+
+## Latency/Throughput Targets
+- **Sync**: <500ms (WebSockets/Kafka).
+- **Uploads**: <1s (chunked, presigned URLs).
+- **Processing**: ~1K files/sec.
+
+## Database Schemas
+- **PostgreSQL FileMetadata Table**:
+  ```sql
+  CREATE TABLE file_metadata (
+    file_id UUID PRIMARY KEY,
+    user_id UUID,
+    path TEXT,
+    version INT,
+    hash TEXT,
+    status ENUM('uploading', 'uploaded'),
+    chunks JSONB,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for metadata (file_id, status) via transactions.
+  - **Availability**: High with multi-AZ replication.
+- **PostgreSQL SharedFiles Table**:
+  ```sql
+  CREATE TABLE shared_files (
+    user_id UUID,
+    file_id UUID,
+    shared_at TIMESTAMP,
+    PRIMARY KEY (user_id, file_id)
+  );
+  ```
+  - **Consistency**: Strong for access control.
+- **PostgreSQL VersionHistory Table**:
+  ```sql
+  CREATE TABLE version_history (
+    file_id UUID,
+    version INT,
+    s3_key TEXT,
+    delta_key TEXT,
+    created_at TIMESTAMP,
+    PRIMARY KEY (file_id, version)
+  );
+  ```
+  - **Consistency**: Eventual for deltas.
+
+## Cache Schemas
+- **Redis**:
+  - `file:file_id`: Serialized metadata (path, version).
+  - `sync:user_id`: Pending sync events (file_id, timestamp).
+  - **Consistency**: Eventual, sync with PostgreSQL on miss.
+  - **TTL**: Short for cold files, long for hot.
+- **CloudFront CDN**:
+  - Cache files by `s3_key`.
+  - **Consistency**: Eventual, invalidate on updates.
+- **Tricks**: Redis pipelining for batch sync, CDN pre-fetch for popular files.
+
+## Consistency vs. Availability
+- **PostgreSQL**: 
+  - **Strong Consistency**: For metadata, sharing (ACID transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **S3**: 
+  - **Eventual Consistency**: For file content, strong for metadata reads.
+  - **High Availability**: Multi-region.
+- **Redis**: 
+  - **Eventual Consistency**: For cached metadata, sync events.
+  - **High Availability**: Redis Cluster.
+- **CDN**: 
+  - **Eventual Consistency**: Cache invalidation on file updates.
+  - **High Availability**: Global edge nodes.
+- **Tricks**: PostgreSQL advisory locks for concurrent edits, S3 event triggers for metadata updates.
+
+## Additional Considerations
+- **Search**: Use **Elasticsearch** for file name/path search.
+- **Notifications**: **Kafka** for sync events, WebSockets for real-time updates.
+- **Rate Limiting**: Cap uploads/downloads per user.
+- **Security**: Encrypt files with **KMS**, validate uploads for malware.
+- **Analytics**: Log file operations in **Kafka**, aggregate in **Redshift**.
+- **Backup**: S3 versioning, PostgreSQL snapshots to **Glacier**.
+
+## Correctness Check
+- **Original Design**: All components (S3, PostgreSQL, WebSockets, Kafka, CDN) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added search, notifications, analytics, security, detailed schemas, offline access for completeness.
+
+## Summary
+Dropbox uses **S3** for files, **PostgreSQL** for metadata, **presigned URLs** for uploads, **CDN** for downloads, and **WebSockets/Kafka** for syncing. It supports large files (chunking), deduplication, versioning, and secure sharing. Scales to 10M DAU, 1PB storage, 1K uploads/sec with <500ms sync, <1s uploads, and robust edge case handling (conflicts, corruption, quotas).
+
+---
+
+
+# YouTube/Netflix System Design
+
+## Functional Requirements
+- **Video Upload**: Upload videos with metadata (title, description, tags).
+- **Video Streaming**: Stream videos with adaptive bitrate (HLS/DASH).
+- **Recommendations**: Personalized video suggestions based on user behavior.
+- **Search**: Search videos by title, tags, or uploader.
+- **Interactions**: Like, comment, share, and subscribe.
+- **Playback Controls**: Pause, seek, resume, and adjust quality.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~1B daily active users (DAU), ~10PB storage, ~100K QPS for streaming.
+- **Latency**: <200ms for video start, <500ms for recommendations, ~50K streams/sec.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for video metadata/recommendations, strong for user actions (likes, subscriptions).
+- **Security**: Secure video access, prevent unauthorized uploads/downloads.
+
+## Improvements
+- **Video Storage**: 
+  - Store videos in **S3** with metadata {`video_id`, `title`, `uploader_id`, `description`, `tags`, `upload_time`} in **DynamoDB** for simple key-value access.
+  - Use **Cassandra** for metadata partitioning by `video_id` for efficient point lookups.
+  - Enable **presigned URLs** for direct, multi-part S3 uploads, bypassing backend.
+  - **Post-Processing**: Split videos into short segments (HLS/DASH), transcode into multiple formats, generate manifests, and store in S3.
+- **Video Watching**: 
+  - Fetch **VideoMetadata** from DynamoDB/Cassandra, containing manifest URL in S3.
+  - Client downloads manifest, selects segments based on network conditions, dynamically switches formats for smooth playback.
+- **CDN**: Use **Akamai/Cloudflare** to cache video segments globally, reducing S3 load and latency.
+- **Bitrate Streaming**: 
+  - **DAG Pipeline** (via **Temporal**): 
+    - Upload full video to S3.
+    - Split into segments using **ffmpeg**.
+    - Transcode in parallel (multiple resolutions/formats).
+    - Generate audio/transcripts, create manifest files.
+    - Store segments/manifests in S3, pass URLs between workers.
+    - Mark upload complete in metadata.
+- **Resumable Uploads**: 
+  - Chunk videos into 5-10MB pieces, use **SHA-256** fingerprinting.
+  - Track status in **VideoMetadata** (`chunks` field), update via S3 event notifications.
+  - Resume by skipping uploaded chunks, use **Multipart Upload API**.
+- **Recommendations**: 
+  - Compute via **Spark** (collaborative filtering), store in **Redis** (`recs:user_id`, sorted set).
+  - Periodically refresh for freshness.
+- **Sharding**: 
+  - Shard video metadata by `video_id` (DynamoDB/Cassandra).
+  - Shard user data (views, likes) by `user_id`.
+- **Edge Cases**: 
+  - **Buffering**: Pre-fetch chunks via CDN.
+  - **Geo-Restrictions**: IP-based filtering at CDN.
+  - **High Demand**: Scale CDN edge nodes.
+  - **Video Corruption**: Validate uploads (checksums, format checks).
+  - **Recommendation Staleness**: Refresh Redis cache periodically.
+- **Monitoring**: Track streaming latency, recommendation click-through rate, CDN hit ratio, playback success rate, S3 read/write throughput, Spark job latency.
+
+## Trade-offs
+- **Pre-compute vs. Real-time Recs**: 
+  - **Pre-compute**: Efficient, potentially stale. 
+  - **Real-time**: Fresh, compute-heavy. 
+  - *Choice*: **Pre-compute** with periodic updates.
+- **DynamoDB vs. Cassandra**: 
+  - **DynamoDB**: Simpler, costlier. 
+  - **Cassandra**: Better write scaling, complex. 
+  - *Choice*: **DynamoDB** for ease, Cassandra for heavy writes.
+- **S3 vs. Custom Storage**: 
+  - **S3**: Reliable, costly. 
+  - **Custom**: Cheaper, complex. 
+  - *Choice*: **S3** for durability.
+
+## Why S3 + CDN?
+- **S3**: Scalable, durable storage for videos/segments.
+- **CDN**: Low-latency global delivery, reduces origin load.
+
+## Scalability Estimates
+- **Users**: ~1B DAU via S3 partitioning, DynamoDB/Cassandra scaling.
+- **Storage**: ~10PB with S3.
+- **Streaming**: ~100K QPS with CDN.
+
+## Latency/Throughput Targets
+- **Video Start**: <200ms (CDN, manifest fetch).
+- **Recommendations**: <500ms (Redis).
+- **Streams**: ~50K/sec.
+
+## Database Schemas
+- **DynamoDB VideoMetadata Table**:
+  ```sql
+  Table: videos
+  Partition Key: video_id (String)
+  Attributes:
+    title (String)
+    uploader_id (String)
+    description (String)
+    tags (List<String>)
+    upload_time (Number)
+    manifest_url (String)
+    chunks (Map<String, String>)
+  ```
+  - **Consistency**: Eventual for metadata, strong for upload status.
+  - **Availability**: Multi-region.
+- **Cassandra Videos Table** (alternative):
+  ```sql
+  CREATE TABLE videos (
+    video_id UUID,
+    title TEXT,
+    uploader_id UUID,
+    description TEXT,
+    tags LIST<TEXT>,
+    upload_time TIMESTAMP,
+    manifest_url TEXT,
+    chunks MAP<TEXT, TEXT>,
+    PRIMARY KEY (video_id)
+  );
+  ```
+  - **Consistency**: Eventual, quorum writes.
+- **DynamoDB UserActions Table**:
+  ```sql
+  Table: user_actions
+  Partition Key: user_id (String)
+  Sort Key: video_id (String)
+  Attributes: action_type (String), timestamp (Number)
+  ```
+  - **Consistency**: Strong for likes/subscriptions.
+
+## Cache Schemas
+- **Redis**:
+  - `video:video_id`: Serialized metadata (title, manifest_url).
+  - `recs:user_id`: Sorted set of video_ids by score.
+  - **Consistency**: Eventual, sync with DynamoDB/Cassandra.
+  - **TTL**: Short for cold videos, long for trending.
+- **CDN (Akamai/Cloudflare)**:
+  - Cache segments by `manifest_url` or `segment_url`.
+  - **Consistency**: Eventual, purge on updates.
+- **Tricks**: Redis pipelining for batch recs, CDN pre-fetch for trending videos.
+
+## Consistency vs. Availability
+- **DynamoDB/Cassandra**: 
+  - **Eventual Consistency**: For metadata, recommendations.
+  - **High Availability**: Multi-region, quorum reads/writes.
+- **S3**: 
+  - **Eventual Consistency**: For segments, strong for metadata.
+  - **High Availability**: Multi-region.
+- **Redis**: 
+  - **Eventual Consistency**: For cached metadata/recs.
+  - **High Availability**: Redis Cluster.
+- **CDN**: 
+  - **Eventual Consistency**: Cache invalidation on updates.
+  - **High Availability**: Global edge nodes.
+- **Tricks**: DynamoDB conditional writes for status updates, Cassandra lightweight transactions for critical metadata.
+
+## Additional Considerations
+- **Search**: **Elasticsearch** for title/tags/uploader search.
+- **Notifications**: **Kafka** for interaction events, WebSocket/APNs for real-time alerts.
+- **Analytics**: Log views/interactions in **Kafka**, aggregate in **Redshift**.
+- **Security**: Encrypt videos in S3 with **KMS**, validate uploads for malware.
+- **Rate Limiting**: Cap uploads/views per user.
+- **Subtitles**: Generate/store transcripts in S3, serve via manifest.
+
+## Correctness Check
+- **Original Design**: All components (S3, DynamoDB/Cassandra, CDN, Spark, Temporal) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added search, notifications, analytics, security, subtitles, detailed schemas for completeness.
+
+## Summary
+YouTube/Netflix uses **S3** for videos, **DynamoDB/Cassandra** for metadata, **CDN** for streaming, and **Redis** for recommendations. It supports resumable uploads, adaptive bitrate streaming (HLS/DASH), and personalized recs via **Spark**. Scales to 1B DAU, 10PB storage, 100K QPS with <200ms video start, <500ms recs, and robust edge case handling (buffering, geo-restrictions, corruption).
+
+
+---
+
+
+# Yelp/Nearby Friends System Design
+
+## Functional Requirements
+- **Geospatial Search**: Find businesses or friends by location (lat, lon) or predefined areas (city, neighborhood).
+- **Text Search**: Search by business name, category, or keywords.
+- **Reviews/Ratings**: Submit one review per user per business, compute average ratings.
+- **Filtering**: Filter results by distance, category, rating, or privacy settings.
+- **User Profiles**: Manage user preferences and location data.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~10M daily active users (DAU), ~100K QPS for searches, ~1M businesses.
+- **Latency**: <100ms for geo-queries, <200ms for search results, ~5K searches/sec.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for search results/ratings, strong for review submissions.
+- **Security**: Prevent location spoofing, ensure privacy controls.
+
+## Write-Heavy Considerations
+- **High Throughput**: Handle ~1 write/sec for reviews (low volume for 100M users).
+- **Durability**: Ensure review/rating data persists reliably.
+- **Ingestion Speed**: Fast writes for user reviews with minimal latency.
+
+## Improvements
+- **Geospatial Index**: Use **Redis Geo** for fast location queries {`business_id`, `lat`, `lon`}. Alternative: **PostgreSQL PostGIS** for complex geospatial operations.
+- **Search**: Index business metadata (name, category, tags, location_id) in **Elasticsearch** for full-text and geo-based searches.
+- **Caching**: Cache popular searches (`search:query:lat:lon`) and nearby results (`nearby:lat:lon:radius`) in **Redis** with TTL-based eviction (e.g., 1hr).
+- **Ratings**: 
+  - Store precomputed average in business record, updated incrementally: `(old_avg * old_count + new_rating) / (old_count + 1)`.
+  - Avoid on-the-fly calculations for scalability.
+- **One-Review-Per-Business**: Enforce via unique constraint on `user_id`, `business_id` in reviews table (PostgreSQL/DynamoDB).
+- **Complex Search Queries**: 
+  - Use **quadtree indexing** in Elasticsearch for geospatial searches.
+  - Apply **Haversine formula** to filter by distance, then refine with name/category filters.
+- **Predefined Location Names**: 
+  - **Locations Table**: Map names (e.g., "San Francisco") to GeoJSON polygons, indexed for fast lookups.
+  - Store precomputed `location_id` (e.g., `san_francisco`) in business records (Elasticsearch keyword field).
+  - Query polygons, filter businesses by `location_id` to avoid per-request polygon checks.
+- **Edge Cases**: 
+  - **Location Spoofing**: Validate via IP geolocation.
+  - **Stale Data**: Refresh caches/business data periodically.
+  - **High QPS**: Use **load balancers** (e.g., AWS ALB).
+  - **Privacy Settings**: Filter results on read based on user preferences.
+  - **Inaccurate Coordinates**: Validate lat/lon inputs (range checks).
+- **Monitoring**: Track search latency, geo-query accuracy, cache hit ratio, review write throughput, search success rate.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API communication, encryption in transit.
+  - **gRPC**: High-performance internal microservices (e.g., search, geo-queries).
+  - **WebSocket**: Real-time location updates for friends (if applicable).
+- **APIs**:
+  - `POST /search`: Search businesses by query, lat/lon, filters (e.g., category, rating). Returns paginated results.
+    ```json
+    {
+      "query": "coffee",
+      "lat": 37.7749,
+      "lon": -122.4194,
+      "radius": 5000,
+      "filters": {"category": "cafe", "min_rating": 4}
+    }
+    ```
+  - `GET /nearby`: Fetch nearby businesses/friends by lat/lon, radius. Returns ranked list.
+  - `POST /review`: Submit review/rating for a business, enforce one-per-user.
+    ```json
+    {
+      "user_id": "uuid",
+      "business_id": "uuid",
+      "rating": 5,
+      "comment": "Great service!"
+    }
+    ```
+
+## Trade-offs
+- **Redis Geo vs. PostGIS**: 
+  - **Redis Geo**: Faster for simple queries, limited complexity. 
+  - **PostGIS**: Handles complex geospatial ops, slower. 
+  - *Choice*: **Redis Geo** for low-latency lookups.
+- **Elasticsearch vs. DB**: 
+  - **Elasticsearch**: Optimized for search, less durable. 
+  - **DB**: Durable, slower for complex queries. 
+  - *Choice*: **Elasticsearch** for fast searches.
+- **Caching vs. No Caching**: 
+  - **Caching**: Reduces latency, risks staleness. 
+  - **No Caching**: Fresh, slower. 
+  - *Choice*: **Caching** with TTL.
+
+## Why Redis + Elasticsearch?
+- **Redis**: Fast geo-queries and caching for low-latency responses.
+- **Elasticsearch**: Efficient text/geo searches with quadtree indexing.
+
+## Scalability Estimates
+- **Users**: ~10M DAU via Redis clustering, Elasticsearch sharding.
+- **Searches**: ~100K QPS with load balancing, caching.
+- **Businesses**: ~1M with Elasticsearch indexing.
+
+## Latency/Throughput Targets
+- **Geo-Queries**: <100ms (Redis Geo).
+- **Search Results**: <200ms (Elasticsearch).
+- **Searches**: ~5K/sec.
+
+## Database Schemas
+- **PostgreSQL Businesses Table**:
+  ```sql
+  CREATE TABLE businesses (
+    business_id UUID PRIMARY KEY,
+    name TEXT,
+    lat DOUBLE PRECISION,
+    lon DOUBLE PRECISION,
+    category TEXT,
+    avg_rating FLOAT,
+    review_count INT,
+    location_id TEXT
+  );
+  ```
+  - **Consistency**: Eventual for avg_rating, strong for metadata.
+  - **Availability**: Multi-AZ replication.
+- **PostgreSQL Reviews Table**:
+  ```sql
+  CREATE TABLE reviews (
+    review_id UUID PRIMARY KEY,
+    user_id UUID,
+    business_id UUID,
+    rating INT,
+    comment TEXT,
+    created_at TIMESTAMP,
+    UNIQUE (user_id, business_id)
+  );
+  ```
+  - **Consistency**: Strong for review writes (unique constraint).
+- **PostgreSQL Locations Table**:
+  ```sql
+  CREATE TABLE locations (
+    location_id TEXT PRIMARY KEY,
+    name TEXT,
+    polygon JSONB
+  );
+  ```
+  - **Consistency**: Strong for lookups.
+
+## Cache Schemas
+- **Redis**:
+  - `geo:businesses`: Geo set {`business_id`, `lat`, `lon`}.
+  - `search:query:lat:lon`: Cached search results (JSON).
+  - `nearby:lat:lon:radius`: Cached nearby results.
+  - **Consistency**: Eventual, sync with DB on miss.
+  - **TTL**: 1hr for searches, 10min for nearby.
+- **Tricks**: Redis pipelining for batch geo-queries, LRU eviction for cache.
+
+## Consistency vs. Availability
+- **PostgreSQL**: 
+  - **Strong Consistency**: For review writes, metadata (ACID).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Elasticsearch**: 
+  - **Eventual Consistency**: For search indices.
+  - **High Availability**: Sharded clusters.
+- **Redis**: 
+  - **Eventual Consistency**: For cached results.
+  - **High Availability**: Redis Cluster.
+- **Tricks**: PostgreSQL advisory locks for review writes, Elasticsearch snapshot backups.
+
+## Additional Considerations
+- **Rate Limiting**: Cap search/review submissions per user.
+- **Security**: Encrypt data in transit (HTTPS), validate IP for location.
+- **Analytics**: Log searches/reviews in **Kafka**, aggregate in **Redshift**.
+- **Notifications**: **Kafka** for review events, WebSocket for friend updates.
+- **GeoJSON Data**: Import from public datasets (e.g., OpenStreetMap).
+
+## Network Protocols & APIs (Write-Heavy Optimization)
+- **Protocols**: 
+  - **HTTPS**: Secure, durable API calls.
+  - **gRPC**: Fast internal communication for review writes.
+  - **WebSocket**: Real-time friend location updates.
+- **APIs**: Optimized for low write latency, high durability.
+  - `POST /review`: Asynchronous write with immediate acknowledgment, durable in PostgreSQL.
+  - `GET /search`: Cache-first, fallback to Elasticsearch for freshness.
+
+## Correctness Check
+- **Original Design**: All components (Redis Geo, Elasticsearch, PostgreSQL) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and detailed schemas for completeness.
+
+## Summary
+Yelp/Nearby Friends uses **Redis Geo** for fast location queries, **Elasticsearch** for text/geo searches, and **PostgreSQL** for durable reviews/ratings. It supports complex queries with **quadtree indexing**, predefined locations via **GeoJSON**, and enforces one-review-per-business. Scales to 10M DAU, 100K QPS with <100ms geo-queries, <200ms searches, and robust edge case handling (spoofing, privacy). APIs and protocols optimize for write-heavy review ingestion.
+
+---
+
+
+# Rate Limiter System Design
+
+## Functional Requirements
+- **Rate Limiting**: Enforce per-user or global API request limits (e.g., 100 requests/min).
+- **Rule Management**: Allow service teams to create/update/delete rate-limiting rules.
+- **Burst Handling**: Support temporary request bursts within defined limits.
+- **Distributed Enforcement**: Apply consistent limits across multiple hosts.
+- **Monitoring/Logging**: Track limit violations and usage for auditing.
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~100K QPS for rate checks, ~1M users, ~10K limits/sec.
+- **Latency**: <10ms for rate checks, ~50K checks/sec, <50ms for token refills.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Strong for token updates to prevent over-limiting.
+- **Security**: Prevent abuse (e.g., DDoS), ensure accurate limits.
+
+## Write-Heavy Considerations
+- **High Throughput**: Handle frequent token updates for active users.
+- **Durability**: Persist rule configurations reliably.
+- **Ingestion Speed**: Fast token checks/updates with minimal latency.
+
+## Improvements
+- **Algorithm**: Use **token bucket** for burst flexibility, storing {`user_id`, `tokens`, `last_refill_timestamp`} in **Redis**. Refill tokens based on rate (e.g., 100/min).
+- **TTL Logic**: Set **Redis TTL** to bucket refresh interval (e.g., 1min) to auto-expire stale counters.
+- **Distributed**: 
+  - Deploy **Redis Cluster** for scalability.
+  - Use **Lua scripts** for atomic token updates, avoiding race conditions.
+  - Each host runs a token bucket; requests for the same client may hit different hosts.
+- **Negative Tokens**: Allow temporary negative token balances to handle distributed bursts, ensuring throttling compensates post-burst.
+- **Inter-Host Communication**: 
+  - Use **shared Redis cache** for token state synchronization across hosts.
+  - Alternative: **Gossip protocol** for scalable updates, balancing reliability/speed.
+  - Use **TCP** for reliable cache updates, **UDP** for low-latency gossip (if chosen).
+- **Memory Management**: Remove inactive client buckets after timeout (e.g., 5min). Recreate buckets on new requests to optimize memory.
+- **Rule Management**: 
+  - Store rules {`rule_id`, `user_id`, `endpoint`, `limit`, `interval`} in **PostgreSQL**.
+  - Provide **REST API** for rule CRUD operations, cached in Redis for fast access.
+- **Edge Cases**: 
+  - **Clock Skew**: Use monotonic clocks for consistent timestamps.
+  - **Bursty Traffic**: Adjust bucket size for controlled bursts.
+  - **DDoS Attacks**: Apply global rate limits, block abusive IPs.
+  - **Token Exhaustion**: Queue requests or reject with retry headers.
+  - **Misconfigured Limits**: Maintain audit logs for rule changes.
+- **Monitoring**: Track rejection rate, token refill latency, Redis throughput, rate limit accuracy, rule update latency.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure API for rate checks and rule management.
+  - **gRPC**: High-performance internal communication for token updates.
+  - **TCP**: Reliable Redis synchronization.
+- **APIs**:
+  - `GET /rate/check`: Check if request allowed for user/endpoint.
+    ```json
+    {
+      "user_id": "uuid",
+      "endpoint": "/api/v1/data",
+      "allowed": true,
+      "remaining": 95,
+      "reset_time": 1697056800
+    }
+    ```
+  - `POST /rules`: Create/update rate limit rule.
+    ```json
+    {
+      "user_id": "uuid",
+      "endpoint": "/api/v1/data",
+      "limit": 100,
+      "interval": "60s"
+    }
+    ```
+
+## Trade-offs
+- **Token vs. Leaky Bucket**: 
+  - **Token Bucket**: Allows bursts, API-friendly. 
+  - **Leaky Bucket**: Strict rates, hardware-suited. 
+  - *Choice*: **Token Bucket** for flexibility.
+- **Redis vs. In-Memory**: 
+  - **Redis**: Durable, distributed. 
+  - **In-Memory**: Faster, volatile. 
+  - *Choice*: **Redis** for reliability.
+- **Global vs. Per-User Limits**: 
+  - **Global**: Prevents abuse, coarse. 
+  - **Per-User**: Precise, complex. 
+  - *Choice*: Both for comprehensive control.
+
+## Why Token Bucket + Redis?
+- **Token Bucket**: Handles bursts, suitable for APIs.
+- **Redis**: Scales distributed systems, ensures atomic updates.
+
+## Scalability Estimates
+- **Rate Checks**: ~100K QPS via Redis Cluster.
+- **Users**: ~1M with sharded buckets.
+- **Limits**: ~10K/sec rule enforcement.
+
+## Latency/Throughput Targets
+- **Rate Checks**: <10ms (Redis).
+- **Checks**: ~50K/sec.
+- **Token Refills**: <50ms.
+
+## Database Schemas
+- **PostgreSQL Rules Table**:
+  ```sql
+  CREATE TABLE rate_limit_rules (
+    rule_id UUID PRIMARY KEY,
+    user_id UUID,
+    endpoint TEXT,
+    limit INT,
+    interval INT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+  );
+  ```
+  - **Consistency**: Strong for rule updates (ACID).
+  - **Availability**: Multi-AZ replication.
+
+## Cache Schemas
+- **Redis**:
+  - `bucket:user_id:endpoint`: Hash {`tokens`, `last_refill_timestamp`}.
+  - `rules:endpoint`: Cached rule data (limit, interval).
+  - **Consistency**: Strong via Lua scripts for token updates.
+  - **TTL**: 1min for buckets, 1hr for rules.
+- **Tricks**: Redis pipelining for batch checks, LRU for memory management.
+
+## Consistency vs. Availability
+- **PostgreSQL**: 
+  - **Strong Consistency**: For rule management (transactions).
+  - **High Availability**: Multi-AZ, read replicas.
+- **Redis**: 
+  - **Strong Consistency**: For token updates (Lua scripts).
+  - **High Availability**: Redis Cluster with replicas.
+- **Tricks**: Redis atomic operations for distributed buckets, PostgreSQL advisory locks for rule updates.
+
+## Additional Considerations
+- **Security**: Validate API keys, block abusive IPs via **WAF**.
+- **Analytics**: Log rate limit events in **Kafka**, aggregate in **Redshift**.
+- **Notifications**: Alert on frequent rejections via **SNS**.
+- **Rule Auditing**: Store rule change logs in PostgreSQL.
+- **Load Balancing**: Distribute requests via **AWS ALB**.
+
+## Correctness Check
+- **Original Design**: All components (token bucket, Redis, PostgreSQL) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, analytics, notifications, security, and detailed schemas for completeness.
+
+## Summary
+Rate Limiter uses **token bucket** with **Redis Cluster** for distributed, atomic rate checks, allowing bursts and negative tokens. Rules are managed in **PostgreSQL**, cached in Redis. Scales to 100K QPS, 1M users with <10ms checks, ~50K checks/sec. Handles edge cases (DDoS, skew) and uses **HTTPS/gRPC** for secure, fast communication. Comprehensive monitoring and analytics ensure FAANG-ready performance.
+
+
+---
+
+
+# Log Collection and Analysis System Design
+
+## Functional Requirements
+- **Log Ingestion**: Collect logs from diverse sources (apps, servers, services).
+- **Log Processing**: Parse, enrich, and index logs for querying.
+- **Real-time Querying**: Search logs by keywords, timestamps, or metadata.
+- **Analytics**: Generate insights (e.g., error rates, usage trends) via batch processing.
+- **Visualization**: Display logs and analytics in dashboards.
+- **Alerting**: Notify on specific log patterns (e.g., errors).
+
+## Non-Functional Requirements
+- **Scalability**: Handle ~1M logs/sec, ~1PB storage, ~10K QPS for queries.
+- **Latency**: <100ms for log ingestion, <500ms for queries, ~100K logs/sec processing.
+- **Availability**: 99.99% uptime, no single points of failure.
+- **Consistency**: Eventual for log indexing, strong for alerting rules.
+- **Security**: Encrypt logs in transit/storage, control access.
+
+## Write-Heavy Considerations
+- **High Throughput**: Ingest ~1M logs/sec with minimal latency.
+- **Durability**: Ensure no log loss during ingestion.
+- **Ingestion Speed**: Fast, reliable write pipeline for logs.
+
+## Improvements
+- **Ingestion**: 
+  - Use **Kafka** for high-throughput log ingestion, partitioned by `source` or `timestamp`.
+  - Producers send logs to topics (e.g., `app_logs`, `server_logs`).
+- **Processing**: 
+  - **ELK Stack**: 
+    - **Logstash**: Parse/enrich logs (e.g., extract fields, add timestamps).
+    - **Elasticsearch**: Store/index logs for fast searches.
+    - **Kibana**: Visualize logs via dashboards.
+  - **Spark**: Batch analytics for trends (e.g., error spikes, usage patterns).
+- **Buffering**: 
+  - Buffer logs in **Kafka** to handle ingestion spikes.
+  - Use **consumer groups** for parallel processing by Logstash workers.
+- **Real-time Querying**: 
+  - Index logs in **Elasticsearch** with time-based indices (e.g., `logs-YYYY-MM-DD`).
+  - Optimize for keyword, range, and metadata searches.
+- **Edge Cases**: 
+  - **Log Spikes**: Scale Kafka partitions dynamically.
+  - **Malformed Logs**: Validate (schema checks) before ingestion, divert invalid logs to dead-letter queue.
+  - **Data Retention**: Set **TTL policies** in Elasticsearch (e.g., 30 days).
+  - **Consumer Lag**: Scale Logstash/Spark workers, monitor lag.
+  - **Log Duplication**: Use idempotency keys (e.g., `log_id`) in Kafka messages.
+- **Monitoring**: Track ingestion latency, query response time, Kafka partition lag, log processing success rate, Elasticsearch indexing rate.
+
+## Network Protocols & APIs
+- **Protocols**: 
+  - **HTTPS**: Secure log ingestion and query APIs.
+  - **gRPC**: Fast internal communication for log processing.
+  - **TCP**: Reliable Kafka producer/consumer connections.
+- **APIs**:
+  - `POST /logs`: Ingest logs with source, timestamp, and payload.
+    ```json
+    {
+      "source": "app1",
+      "timestamp": 1697056800000,
+      "log_id": "uuid",
+      "payload": {"level": "error", "message": "Failed to connect"}
+    }
+    ```
+  - `GET /search`: Query logs by keyword, time range, or metadata.
+    ```json
+    {
+      "query": "error",
+      "start_time": 1697056800000,
+      "end_time": 1697056860000,
+      "filters": {"source": "app1"}
+    }
+    ```
+
+## Trade-offs
+- **Kafka vs. RabbitMQ**: 
+  - **Kafka**: High-throughput, durable, partitioned. 
+  - **RabbitMQ**: Simpler, less scalable. 
+  - *Choice*: **Kafka** for log volume.
+- **Elasticsearch vs. ClickHouse**: 
+  - **Elasticsearch**: Flexible text search, general-purpose. 
+  - **ClickHouse**: Faster analytics, less flexible. 
+  - *Choice*: **Elasticsearch** for querying.
+- **Real-time vs. Batch Processing**: 
+  - **Real-time**: Fast, resource-heavy. 
+  - **Batch**: Efficient, delayed. 
+  - *Choice*: Both (Elasticsearch for real-time, Spark for batch).
+
+## Why Kafka + ELK?
+- **Kafka**: Reliable, scalable log ingestion with partitioning.
+- **ELK**: Robust search, indexing, and visualization for logs.
+
+## Scalability Estimates
+- **Logs**: ~1M logs/sec via Kafka partitioning.
+- **Storage**: ~1PB with Elasticsearch sharding, compression.
+- **Queries**: ~10K QPS with Elasticsearch clusters.
+
+## Latency/Throughput Targets
+- **Ingestion**: <100ms (Kafka).
+- **Queries**: <500ms (Elasticsearch).
+- **Processing**: ~100K logs/sec.
+
+## Database Schemas
+- **Elasticsearch Logs Index**:
+  ```json
+  {
+    "mappings": {
+      "properties": {
+        "log_id": {"type": "keyword"},
+        "source": {"type": "keyword"},
+        "timestamp": {"type": "date"},
+        "level": {"type": "keyword"},
+        "message": {"type": "text"},
+        "metadata": {"type": "object"}
+      }
+    }
+  }
+  ```
+  - **Consistency**: Eventual for indexing.
+  - **Availability**: Sharded, replicated clusters.
+- **Kafka Topics**:
+  - `logs`: Partitioned by `source` or `timestamp`.
+  - Message: `{log_id, source, timestamp, payload}`.
+  - **Consistency**: Durable with replication.
+
+## Cache Schemas
+- **Redis**:
+  - `query:query_hash`: Cached search results (JSON).
+  - `metrics:source`: Aggregated metrics (e.g., error counts).
+  - **Consistency**: Eventual, sync with Elasticsearch.
+  - **TTL**: 10min for queries, 1hr for metrics.
+- **Tricks**: Redis pipelining for batch queries, LRU eviction for cache.
+
+## Consistency vs. Availability
+- **Kafka**: 
+  - **Strong Consistency**: For log durability (replication).
+  - **High Availability**: Multi-broker clusters.
+- **Elasticsearch**: 
+  - **Eventual Consistency**: For log indexing.
+  - **High Availability**: Sharded, replicated indices.
+- **Redis**: 
+  - **Eventual Consistency**: For cached queries/metrics.
+  - **High Availability**: Redis Cluster.
+- **Tricks**: Kafka idempotent producers, Elasticsearch snapshot backups.
+
+## Additional Considerations
+- **Security**: Encrypt logs in transit (HTTPS), at rest (Elasticsearch encryption).
+- **Alerting**: Use **Kibana** for rule-based alerts, notify via **SNS**.
+- **Rate Limiting**: Cap log ingestion per source to prevent abuse.
+- **Analytics**: **Spark** for deep insights (e.g., anomaly detection).
+- **Backup**: Archive logs to **S3/Glacier** for long-term storage.
+
+## Correctness Check
+- **Original Design**: All components (Kafka, ELK, Spark) align with scalability/latency goals. No incorrect details.
+- **Missing Details**: Added APIs, protocols, alerting, security, analytics, and detailed schemas for completeness.
+
+## Summary
+Log Collection system uses **Kafka** for high-throughput ingestion, **ELK Stack** for parsing/storage/visualization, and **Spark** for analytics. It scales to 1M logs/sec, 1PB storage, 10K QPS with <100ms ingestion, <500ms queries. Handles edge cases (spikes, malformed logs) with buffering, validation, and TTLs. **HTTPS/gRPC** ensure secure, fast communication, making it FAANG-ready.
+
+---
+
 
 ### 12. Voting System
 **Improvements:**
